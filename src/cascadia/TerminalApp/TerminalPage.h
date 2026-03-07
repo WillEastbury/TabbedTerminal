@@ -227,6 +227,13 @@ namespace winrt::TerminalApp::implementation
         Microsoft::UI::Xaml::Controls::SplitButton _newTabButton{ nullptr };
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
 
+        // Vertical tab sidebar
+        Windows::UI::Xaml::Controls::ListView _verticalTabListView{ nullptr };
+        bool _syncingTabSelection{ false };
+        bool _sidebarResizing{ false };
+        double _sidebarResizeStartX{ 0 };
+        double _sidebarResizeStartWidth{ 0 };
+
         Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };
 
         Windows::Foundation::Collections::IObservableVector<TerminalApp::Tab> _tabs;
@@ -460,6 +467,20 @@ namespace winrt::TerminalApp::implementation
         void _OnFirstLayout(const IInspectable& sender, const IInspectable& eventArgs);
         void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab);
         void _UpdateBackground(const winrt::Microsoft::Terminal::Settings::Model::Profile& profile);
+
+        // Vertical tab sidebar handlers
+        void _OnVerticalTabSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& eventArgs);
+        void _OnVerticalNewTabButtonClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _OnVerticalSettingsButtonClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _OnVerticalTabCloseClick(uint32_t tabIndex);
+        void _AddVerticalTabEntry(const winrt::TerminalApp::Tab& tab, uint32_t index);
+        void _RemoveVerticalTabEntry(uint32_t index);
+        void _UpdateVerticalTabTitle(uint32_t index, const winrt::hstring& title);
+        void _OnSidebarResizePointerPressed(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _OnSidebarResizePointerMoved(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _OnSidebarResizePointerReleased(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _OnSidebarResizePointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _OnSidebarResizePointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
 
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);

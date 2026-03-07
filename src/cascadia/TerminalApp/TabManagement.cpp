@@ -153,6 +153,9 @@ namespace winrt::TerminalApp::implementation
         auto tabViewItem = newTabImpl->TabViewItem();
         _tabView.TabItems().InsertAt(insertPosition, tabViewItem);
 
+        // Add entry to the vertical tab sidebar
+        _AddVerticalTabEntry(*newTabImpl, insertPosition);
+
         // Set this tab's icon to the icon from the content
         _UpdateTabIcon(*newTabImpl);
 
@@ -255,9 +258,19 @@ namespace winrt::TerminalApp::implementation
         }
         if (_tabRow)
         {
-            // collapse/show the row that the tabs are in.
-            // NaN is the special value XAML uses for "Auto" sizing.
-            _tabRow.Height(isVisible ? NAN : 0);
+            // The horizontal tab row is always hidden with vertical tabs,
+            // but kept in the visual tree so TabView events still fire
+            _tabRow.Height(0);
+            _tabRow.Opacity(0);
+            _tabRow.IsHitTestVisible(false);
+        }
+        // Show/hide the vertical tab sidebar based on visibility rules
+        if (_verticalTabListView)
+        {
+            if (auto sidebar = this->VerticalTabSidebar())
+            {
+                sidebar.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
+            }
         }
     }
 
@@ -460,6 +473,7 @@ namespace winrt::TerminalApp::implementation
 
         _tabs.RemoveAt(tabIndex);
         _tabView.TabItems().RemoveAt(tabIndex);
+        _RemoveVerticalTabEntry(tabIndex);
         _UpdateTabIndices();
 
         // To close the window here, we need to close the hosting window.
@@ -1039,6 +1053,14 @@ namespace winrt::TerminalApp::implementation
             {
                 const auto tab{ _tabs.GetAt(selectedIndex) };
                 _UpdatedSelectedTab(tab);
+
+                // Sync the vertical tab sidebar selection
+                if (!_syncingTabSelection && _verticalTabListView)
+                {
+                    _syncingTabSelection = true;
+                    _verticalTabListView.SelectedIndex(selectedIndex);
+                    _syncingTabSelection = false;
+                }
             }
         }
     }
@@ -1101,6 +1123,18 @@ namespace winrt::TerminalApp::implementation
             _tabView.TabItems().RemoveAt(currentTabIndex);
             _tabView.TabItems().InsertAt(newTabIndex, tabViewItem);
             _tabView.SelectedItem(tabViewItem);
+
+            // Sync vertical tab sidebar: remove from old position, re-insert at new
+            if (_verticalTabListView)
+            {
+                auto vertItems = _verticalTabListView.Items();
+                auto vertItem = vertItems.GetAt(currentTabIndex);
+                vertItems.RemoveAt(currentTabIndex);
+                vertItems.InsertAt(newTabIndex, vertItem);
+                _syncingTabSelection = true;
+                _verticalTabListView.SelectedIndex(gsl::narrow_cast<int32_t>(newTabIndex));
+                _syncingTabSelection = false;
+            }
 
             if (auto autoPeer = Automation::Peers::FrameworkElementAutomationPeer::FromElement(*this))
             {

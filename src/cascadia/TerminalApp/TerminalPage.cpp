@@ -21,6 +21,7 @@
 #include "ScratchpadContent.h"
 #include "SettingsPaneContent.h"
 #include "SnippetsPaneContent.h"
+#include "ColorPickupFlyout.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
@@ -323,6 +324,7 @@ namespace winrt::TerminalApp::implementation
         _tabContent = this->TabContent();
         _tabRow = this->TabRow();
         _tabView = _tabRow.TabView();
+        _verticalTabListView = this->VerticalTabListView();
         _rearranging = false;
 
         const auto canDragDrop = CanDragDrop();
@@ -335,37 +337,9 @@ namespace winrt::TerminalApp::implementation
         auto tabRowImpl = winrt::get_self<implementation::TabRowControl>(_tabRow);
         _newTabButton = tabRowImpl->NewTabButton();
 
-        if (_settings.GlobalSettings().ShowTabsInTitlebar())
-        {
-            // Remove the TabView from the page. We'll hang on to it, we need to
-            // put it in the titlebar.
-            uint32_t index = 0;
-            if (this->Root().Children().IndexOf(_tabRow, index))
-            {
-                this->Root().Children().RemoveAt(index);
-            }
-
-            // Inform the host that our titlebar content has changed.
-            SetTitleBarContent.raise(*this, _tabRow);
-
-            // GH#13143 Manually set the tab row's background to transparent here.
-            //
-            // We're doing it this way because ThemeResources are tricky. We
-            // default in XAML to using the appropriate ThemeResource background
-            // color for our TabRow. When tabs in the titlebar are _disabled_,
-            // this will ensure that the tab row has the correct theme-dependent
-            // value. When tabs in the titlebar are _enabled_ (the default),
-            // we'll switch the BG to Transparent, to let the Titlebar Control's
-            // background be used as the BG for the tab row.
-            //
-            // We can't do it the other way around (default to Transparent, only
-            // switch to a color when disabling tabs in the titlebar), because
-            // looking up the correct ThemeResource from and App dictionary is a
-            // capital-H Hard problem.
-            const auto transparent = Media::SolidColorBrush();
-            transparent.Color(Windows::UI::Colors::Transparent());
-            _tabRow.Background(transparent);
-        }
+        // With vertical tabs, the TabRow is collapsed in the XAML and we use
+        // the vertical sidebar instead. Don't move the TabRow to the titlebar.
+        // The window will use its standard title bar for dragging.
         _updateThemeColors();
 
         // Initialize the state of the CloseButtonOverlayMode property of
@@ -1065,6 +1039,18 @@ namespace winrt::TerminalApp::implementation
             }
         });
         _newTabButton.Flyout(newTabFlyout);
+
+        // Attach the flyout to the vertical settings/gear button
+        if (auto settingsBtn = this->VerticalSettingsButton())
+        {
+            settingsBtn.Flyout(newTabFlyout);
+        }
+
+        // Attach as context flyout on the vertical + button (right-click for profiles)
+        if (auto newTabBtn = this->VerticalNewTabButton())
+        {
+            newTabBtn.ContextFlyout(newTabFlyout);
+        }
     }
 
     // Method Description:
@@ -5769,5 +5755,411 @@ namespace winrt::TerminalApp::implementation
         profileMenuItemFlyout.Items().Append(runAsAdminItem);
 
         return profileMenuItemFlyout;
+    }
+
+    // Vertical tab sidebar: add an entry for a new tab
+    void TerminalPage::_AddVerticalTabEntry(const winrt::TerminalApp::Tab& tab, uint32_t index)
+    {
+        if (!_verticalTabListView)
+        {
+            return;
+        }
+
+        // Build a Grid: [ColorBar (4px) | Spinner (Auto) | Title (*) | Close (Auto)]
+        auto grid = WUX::Controls::Grid();
+
+        WUX::Controls::ColumnDefinition colorCol;
+        colorCol.Width(WUX::GridLengthHelper::FromPixels(4));
+        WUX::Controls::ColumnDefinition spinnerCol;
+        spinnerCol.Width(WUX::GridLengthHelper::Auto());
+        WUX::Controls::ColumnDefinition titleCol;
+        titleCol.Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Star));
+        WUX::Controls::ColumnDefinition closeCol;
+        closeCol.Width(WUX::GridLengthHelper::Auto());
+        grid.ColumnDefinitions().Append(colorCol);
+        grid.ColumnDefinitions().Append(spinnerCol);
+        grid.ColumnDefinitions().Append(titleCol);
+        grid.ColumnDefinitions().Append(closeCol);
+
+        // Color indicator bar
+        auto colorBar = WUX::Controls::Border();
+        colorBar.Width(4);
+        colorBar.CornerRadius(WUX::CornerRadiusHelper::FromUniformRadius(2));
+        colorBar.Margin(WUX::ThicknessHelper::FromLengths(0, 2, 4, 2));
+        colorBar.Background(WUX::Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+        colorBar.VerticalAlignment(WUX::VerticalAlignment::Stretch);
+        WUX::Controls::Grid::SetColumn(colorBar, 0);
+        grid.Children().Append(colorBar);
+
+        // Update color bar from tab's current color
+        auto tabImpl = _GetTabImpl(tab);
+        if (tabImpl)
+        {
+            auto tabColor = tabImpl->GetTabColor();
+            if (tabColor.has_value())
+            {
+                colorBar.Background(WUX::Media::SolidColorBrush{ tabColor.value() });
+            }
+        }
+
+        // Progress spinner
+        Microsoft::UI::Xaml::Controls::ProgressRing spinner;
+        spinner.Width(14);
+        spinner.Height(14);
+        spinner.Margin(WUX::ThicknessHelper::FromLengths(0, 0, 4, 0));
+        spinner.IsActive(false);
+        spinner.Visibility(WUX::Visibility::Collapsed);
+        spinner.VerticalAlignment(WUX::VerticalAlignment::Center);
+        WUX::Controls::Grid::SetColumn(spinner, 1);
+        grid.Children().Append(spinner);
+
+        // Update spinner from tab's current status
+        if (tabImpl)
+        {
+            auto status = tabImpl->TabStatus();
+            if (status.IsProgressRingActive())
+            {
+                spinner.IsActive(true);
+                spinner.IsIndeterminate(status.IsProgressRingIndeterminate());
+                spinner.Visibility(WUX::Visibility::Visible);
+            }
+        }
+
+        // Title — use the profile name if available, fall back to tab title
+        auto textBlock = WUX::Controls::TextBlock();
+        winrt::hstring displayTitle = tab.Title();
+        if (tabImpl)
+        {
+            auto profile = tabImpl->GetFocusedProfile();
+            if (profile)
+            {
+                auto profileName = profile.Name();
+                if (!profileName.empty())
+                {
+                    displayTitle = profileName;
+                }
+            }
+        }
+        textBlock.Text(displayTitle);
+        textBlock.TextTrimming(WUX::TextTrimming::CharacterEllipsis);
+        textBlock.VerticalAlignment(WUX::VerticalAlignment::Center);
+        WUX::Controls::Grid::SetColumn(textBlock, 2);
+        grid.Children().Append(textBlock);
+
+        // Close button
+        auto closeBtn = WUX::Controls::Button();
+        closeBtn.Content(winrt::box_value(L"\xE711"));
+        closeBtn.FontFamily(WUX::Media::FontFamily{ L"Segoe MDL2 Assets" });
+        closeBtn.FontSize(10);
+        closeBtn.Padding(WUX::ThicknessHelper::FromUniformLength(2));
+        closeBtn.MinWidth(0);
+        closeBtn.MinHeight(0);
+        closeBtn.Width(20);
+        closeBtn.Height(20);
+        closeBtn.VerticalAlignment(WUX::VerticalAlignment::Center);
+        closeBtn.Background(WUX::Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+        closeBtn.BorderThickness(WUX::ThicknessHelper::FromUniformLength(0));
+        WUX::Controls::Grid::SetColumn(closeBtn, 3);
+
+        auto weakThis = get_weak();
+
+        // Close handler
+        closeBtn.Click([weakThis, closeBtnWeak = winrt::make_weak(closeBtn)](auto&&, auto&&) {
+            auto page = weakThis.get();
+            auto btn = closeBtnWeak.get();
+            if (!page || !btn)
+                return;
+            auto items = page->_verticalTabListView.Items();
+            for (uint32_t i = 0; i < items.Size(); i++)
+            {
+                if (auto itemGrid = items.GetAt(i).try_as<WUX::Controls::Grid>())
+                {
+                    for (auto&& child : itemGrid.Children())
+                    {
+                        if (child.try_as<WUX::Controls::Button>() == btn)
+                        {
+                            page->_OnVerticalTabCloseClick(i);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        grid.Children().Append(closeBtn);
+
+        // Right-click context menu with color picker
+        auto contextMenu = WUX::Controls::MenuFlyout();
+        auto colorMenuItem = WUX::Controls::MenuFlyoutItem();
+        colorMenuItem.Text(L"Set Tab Color...");
+        WUX::Controls::FontIcon colorIcon;
+        colorIcon.FontFamily(WUX::Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
+        colorIcon.Glyph(L"\xE790");
+        colorMenuItem.Icon(colorIcon);
+        colorMenuItem.Click([weakThis](auto&&, auto&&) {
+            if (auto page = weakThis.get())
+            {
+                auto selectedIdx = page->_verticalTabListView.SelectedIndex();
+                if (selectedIdx >= 0 && selectedIdx < gsl::narrow_cast<int32_t>(page->_tabs.Size()))
+                {
+                    auto selectedTab = page->_tabs.GetAt(selectedIdx);
+                    if (auto selectedTabImpl = _GetTabImpl(selectedTab))
+                    {
+                        if (!page->_tabColorPicker)
+                        {
+                            page->_tabColorPicker = winrt::make<ColorPickupFlyout>();
+                        }
+                        selectedTabImpl->AttachColorPicker(page->_tabColorPicker);
+                    }
+                }
+            }
+        });
+        contextMenu.Items().Append(colorMenuItem);
+        grid.ContextFlyout(contextMenu);
+
+        _verticalTabListView.Items().InsertAt(index, grid);
+
+        // Listen for title and status changes on the tab
+        tab.PropertyChanged([weakThis](auto&&, const WUX::Data::PropertyChangedEventArgs& args) {
+            auto page = weakThis.get();
+            if (!page)
+                return;
+
+            const auto propName = args.PropertyName();
+
+            if (propName == L"Title")
+            {
+                // Update all titles to match current tab titles
+                for (uint32_t i = 0; i < page->_tabs.Size() && i < page->_verticalTabListView.Items().Size(); i++)
+                {
+                    auto t = page->_tabs.GetAt(i);
+                    if (auto itemGrid = page->_verticalTabListView.Items().GetAt(i).try_as<WUX::Controls::Grid>())
+                    {
+                        for (auto&& child : itemGrid.Children())
+                        {
+                            if (auto tb = child.try_as<WUX::Controls::TextBlock>())
+                            {
+                                // Use profile name if available, else tab title
+                                winrt::hstring title = t.Title();
+                                if (auto tImpl = _GetTabImpl(t))
+                                {
+                                    auto prof = tImpl->GetFocusedProfile();
+                                    if (prof && !prof.Name().empty())
+                                    {
+                                        title = prof.Name();
+                                    }
+                                }
+                                tb.Text(title);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Listen to TabStatus changes for spinner and color
+        if (tabImpl)
+        {
+            auto status = tabImpl->TabStatus();
+            auto spinnerWeak = winrt::make_weak(spinner);
+            auto colorBarWeak = winrt::make_weak(colorBar);
+
+            status.PropertyChanged([weakThis, spinnerWeak, colorBarWeak](auto&&, const WUX::Data::PropertyChangedEventArgs& args) {
+                auto page = weakThis.get();
+                if (!page)
+                    return;
+
+                const auto propName = args.PropertyName();
+
+                if (propName == L"IsProgressRingActive" || propName == L"IsProgressRingIndeterminate")
+                {
+                    if (auto sp = spinnerWeak.get())
+                    {
+                        // Find which tab this belongs to and get its status
+                        auto items = page->_verticalTabListView.Items();
+                        for (uint32_t i = 0; i < page->_tabs.Size() && i < items.Size(); i++)
+                        {
+                            if (auto itemGrid = items.GetAt(i).try_as<WUX::Controls::Grid>())
+                            {
+                                for (auto&& child : itemGrid.Children())
+                                {
+                                    if (child.try_as<Microsoft::UI::Xaml::Controls::ProgressRing>() == sp)
+                                    {
+                                        auto t = page->_tabs.GetAt(i);
+                                        if (auto tImpl = _GetTabImpl(t))
+                                        {
+                                            auto st = tImpl->TabStatus();
+                                            sp.IsActive(st.IsProgressRingActive());
+                                            sp.IsIndeterminate(st.IsProgressRingIndeterminate());
+                                            sp.Visibility(st.IsProgressRingActive() ? WUX::Visibility::Visible : WUX::Visibility::Collapsed);
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (propName == L"TabColorIndicator")
+                {
+                    if (auto cb = colorBarWeak.get())
+                    {
+                        auto items = page->_verticalTabListView.Items();
+                        for (uint32_t i = 0; i < page->_tabs.Size() && i < items.Size(); i++)
+                        {
+                            if (auto itemGrid = items.GetAt(i).try_as<WUX::Controls::Grid>())
+                            {
+                                for (auto&& child : itemGrid.Children())
+                                {
+                                    if (child.try_as<WUX::Controls::Border>() == cb)
+                                    {
+                                        auto t = page->_tabs.GetAt(i);
+                                        if (auto tImpl = _GetTabImpl(t))
+                                        {
+                                            auto tabColor = tImpl->GetTabColor();
+                                            if (tabColor.has_value())
+                                            {
+                                                cb.Background(WUX::Media::SolidColorBrush{ tabColor.value() });
+                                            }
+                                            else
+                                            {
+                                                cb.Background(WUX::Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    // Vertical tab sidebar: remove an entry at the given index
+    void TerminalPage::_RemoveVerticalTabEntry(uint32_t index)
+    {
+        if (_verticalTabListView && index < _verticalTabListView.Items().Size())
+        {
+            _verticalTabListView.Items().RemoveAt(index);
+        }
+    }
+
+    // Vertical tab sidebar: update the title at the given index
+    void TerminalPage::_UpdateVerticalTabTitle(uint32_t index, const winrt::hstring& title)
+    {
+        if (_verticalTabListView && index < _verticalTabListView.Items().Size())
+        {
+            if (auto itemGrid = _verticalTabListView.Items().GetAt(index).try_as<WUX::Controls::Grid>())
+            {
+                for (auto&& child : itemGrid.Children())
+                {
+                    if (auto tb = child.try_as<WUX::Controls::TextBlock>())
+                    {
+                        tb.Text(title);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Vertical tab sidebar: close a tab by index
+    void TerminalPage::_OnVerticalTabCloseClick(uint32_t tabIndex)
+    {
+        if (tabIndex < _tabs.Size())
+        {
+            auto tab = _tabs.GetAt(tabIndex);
+            if (auto tabImpl = _GetTabImpl(tab))
+            {
+                _HandleCloseTabRequested(*tabImpl);
+            }
+        }
+    }
+
+    // Vertical tab sidebar: selection changed handler
+    void TerminalPage::_OnVerticalTabSelectionChanged(const IInspectable& /*sender*/, const WUX::Controls::SelectionChangedEventArgs& /*eventArgs*/)
+    {
+        if (_syncingTabSelection || _removing || _rearranging)
+        {
+            return;
+        }
+
+        auto selectedIndex = _verticalTabListView.SelectedIndex();
+        if (selectedIndex >= 0 && selectedIndex < gsl::narrow_cast<int32_t>(_tabs.Size()))
+        {
+            _syncingTabSelection = true;
+            _SelectTab(selectedIndex);
+            _syncingTabSelection = false;
+        }
+    }
+
+    // Vertical tab sidebar: new tab button click handler
+    void TerminalPage::_OnVerticalNewTabButtonClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        _OpenNewTerminalViaDropdown(Settings::Model::NewTerminalArgs());
+    }
+
+    // Vertical tab sidebar: settings button click handler
+    void TerminalPage::_OnVerticalSettingsButtonClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        OpenSettingsUI();
+    }
+
+    // Sidebar resize: pointer pressed — start tracking
+    void TerminalPage::_OnSidebarResizePointerPressed(const IInspectable& sender, const WUX::Input::PointerRoutedEventArgs& args)
+    {
+        _sidebarResizing = true;
+        auto sidebar = this->VerticalTabSidebar();
+        _sidebarResizeStartWidth = sidebar.Width();
+        _sidebarResizeStartX = args.GetCurrentPoint(this->Root()).Position().X;
+        if (auto border = sender.try_as<WUX::UIElement>())
+        {
+            border.CapturePointer(args.Pointer());
+        }
+        args.Handled(true);
+    }
+
+    // Sidebar resize: pointer moved — adjust width
+    void TerminalPage::_OnSidebarResizePointerMoved(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& args)
+    {
+        if (!_sidebarResizing)
+            return;
+
+        auto currentX = args.GetCurrentPoint(this->Root()).Position().X;
+        auto delta = currentX - _sidebarResizeStartX;
+        auto newWidth = std::clamp(_sidebarResizeStartWidth + delta, 48.0, 400.0);
+        this->VerticalTabSidebar().Width(newWidth);
+        args.Handled(true);
+    }
+
+    // Sidebar resize: pointer released — stop tracking
+    void TerminalPage::_OnSidebarResizePointerReleased(const IInspectable& sender, const WUX::Input::PointerRoutedEventArgs& args)
+    {
+        _sidebarResizing = false;
+        if (auto border = sender.try_as<WUX::UIElement>())
+        {
+            border.ReleasePointerCapture(args.Pointer());
+        }
+        args.Handled(true);
+    }
+
+    // Sidebar resize: show resize cursor on hover
+    void TerminalPage::_OnSidebarResizePointerEntered(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
+    {
+        Windows::UI::Core::CoreWindow::GetForCurrentThread().PointerCursor(
+            Windows::UI::Core::CoreCursor{ Windows::UI::Core::CoreCursorType::SizeWestEast, 0 });
+    }
+
+    // Sidebar resize: restore default cursor on leave
+    void TerminalPage::_OnSidebarResizePointerExited(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
+    {
+        if (!_sidebarResizing)
+        {
+            Windows::UI::Core::CoreWindow::GetForCurrentThread().PointerCursor(
+                Windows::UI::Core::CoreCursor{ Windows::UI::Core::CoreCursorType::Arrow, 0 });
+        }
     }
 }
