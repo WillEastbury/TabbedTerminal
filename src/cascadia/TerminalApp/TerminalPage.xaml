@@ -16,8 +16,9 @@
     <Grid x:Name="Root"
           Background="Transparent">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition x:Name="LeftSidebarColumn" Width="Auto" />
             <ColumnDefinition Width="*" />
+            <ColumnDefinition x:Name="RightSidebarColumn" Width="0" />
         </Grid.ColumnDefinitions>
 
         <!-- Vertical Tab Sidebar -->
@@ -87,12 +88,9 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- Hidden horizontal TabRow - kept functional but invisible -->
+            <!-- Horizontal TabRow - visible in top mode, hidden in left/right mode -->
             <local:TabRowControl x:Name="TabRow"
                                  Grid.Row="0"
-                                 Height="0"
-                                 Opacity="0"
-                                 IsHitTestVisible="False"
                                  KeyUp="_KeyDownHandler" />
 
             <StackPanel Grid.Row="1"

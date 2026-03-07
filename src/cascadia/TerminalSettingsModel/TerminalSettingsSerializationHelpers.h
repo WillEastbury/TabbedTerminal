@@ -293,6 +293,15 @@ JSON_ENUM_MAPPER(::winrt::Microsoft::UI::Xaml::Controls::TabViewWidthMode)
     };
 };
 
+JSON_ENUM_MAPPER(::winrt::Microsoft::Terminal::Settings::Model::TabPosition)
+{
+    JSON_MAPPINGS(3) = {
+        pair_type{ "top", ValueType::Top },
+        pair_type{ "left", ValueType::Left },
+        pair_type{ "right", ValueType::Right },
+    };
+};
+
 JSON_ENUM_MAPPER(winrt::Microsoft::Terminal::Settings::Model::ExpandCommandType)
 {
     JSON_MAPPINGS(2) = {

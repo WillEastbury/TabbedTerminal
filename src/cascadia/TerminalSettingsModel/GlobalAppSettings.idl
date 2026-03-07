@@ -50,6 +50,13 @@ namespace Microsoft.Terminal.Settings.Model
         AfterCurrentTab,
     };
 
+    enum TabPosition
+    {
+        Top,
+        Left,
+        Right,
+    };
+
     [default_interface] runtimeclass GlobalAppSettings {
         Guid DefaultProfile;
 
@@ -66,6 +73,7 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_SETTING(Microsoft.UI.Xaml.Controls.TabViewWidthMode, TabWidthMode);
         INHERITABLE_SETTING(Boolean, UseAcrylicInTabRow);
         INHERITABLE_SETTING(Boolean, ShowTabsInTitlebar);
+        INHERITABLE_SETTING(TabPosition, TabPosition);
         INHERITABLE_SETTING(String, WordDelimiters);
         INHERITABLE_SETTING(Boolean, CopyOnSelect);
         INHERITABLE_SETTING(Boolean, InputServiceWarning);

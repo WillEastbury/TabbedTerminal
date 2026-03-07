@@ -241,35 +241,46 @@ namespace winrt::TerminalApp::implementation
     // - Handle changes in tab layout.
     void TerminalPage::_UpdateTabView()
     {
-        // The tab row should only be visible if:
-        // - we're not in focus mode
-        // - we're not in full screen, or the user has enabled fullscreen tabs
-        // - there is more than one tab, or the user has chosen to always show tabs
         const auto isVisible = !_isInFocusMode &&
                                (!_isFullscreen || _showTabsFullscreen) &&
                                (_settings.GlobalSettings().ShowTabsInTitlebar() ||
                                 (_tabs.Size() > 1) ||
                                 _settings.GlobalSettings().AlwaysShowTabs());
 
+        const auto tabPos = _settings.GlobalSettings().TabPosition();
+        const bool isVertical = (tabPos == TabPosition::Left || tabPos == TabPosition::Right);
+
         if (_tabView)
         {
-            // collapse/show the tabs themselves
             _tabView.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
         }
         if (_tabRow)
         {
-            // The horizontal tab row is always hidden with vertical tabs,
-            // but kept in the visual tree so TabView events still fire
-            _tabRow.Height(0);
-            _tabRow.Opacity(0);
-            _tabRow.IsHitTestVisible(false);
+            if (isVertical)
+            {
+                // Hide the horizontal tab row but keep in visual tree
+                _tabRow.Height(0);
+                _tabRow.Opacity(0);
+                _tabRow.IsHitTestVisible(false);
+            }
+            else
+            {
+                // Show the horizontal tab row normally
+                _tabRow.ClearValue(WUX::FrameworkElement::HeightProperty());
+                _tabRow.Opacity(1);
+                _tabRow.IsHitTestVisible(true);
+            }
         }
-        // Show/hide the vertical tab sidebar based on visibility rules
+        // Show/hide the vertical tab sidebar
         if (_verticalTabListView)
         {
             if (auto sidebar = this->VerticalTabSidebar())
             {
-                sidebar.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
+                sidebar.Visibility((isVisible && isVertical) ? Visibility::Visible : Visibility::Collapsed);
+            }
+            if (auto grip = this->SidebarResizeGrip())
+            {
+                grip.Visibility((isVisible && isVertical) ? Visibility::Visible : Visibility::Collapsed);
             }
         }
     }

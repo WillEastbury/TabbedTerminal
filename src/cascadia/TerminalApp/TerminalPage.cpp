@@ -337,9 +337,9 @@ namespace winrt::TerminalApp::implementation
         auto tabRowImpl = winrt::get_self<implementation::TabRowControl>(_tabRow);
         _newTabButton = tabRowImpl->NewTabButton();
 
-        // With vertical tabs, the TabRow is collapsed in the XAML and we use
-        // the vertical sidebar instead. Don't move the TabRow to the titlebar.
-        // The window will use its standard title bar for dragging.
+        // Apply the tab position setting (top/left/right)
+        _ApplyTabPosition();
+
         _updateThemeColors();
 
         // Initialize the state of the CloseButtonOverlayMode property of
@@ -6130,6 +6130,14 @@ namespace winrt::TerminalApp::implementation
 
         auto currentX = args.GetCurrentPoint(this->Root()).Position().X;
         auto delta = currentX - _sidebarResizeStartX;
+
+        // When sidebar is on the right, dragging left increases width
+        const auto tabPos = _settings.GlobalSettings().TabPosition();
+        if (tabPos == TabPosition::Right)
+        {
+            delta = -delta;
+        }
+
         auto newWidth = std::clamp(_sidebarResizeStartWidth + delta, 48.0, 400.0);
         this->VerticalTabSidebar().Width(newWidth);
         args.Handled(true);
@@ -6160,6 +6168,73 @@ namespace winrt::TerminalApp::implementation
         {
             Windows::UI::Core::CoreWindow::GetForCurrentThread().PointerCursor(
                 Windows::UI::Core::CoreCursor{ Windows::UI::Core::CoreCursorType::Arrow, 0 });
+        }
+    }
+
+    void TerminalPage::_ApplyTabPosition()
+    {
+        const auto tabPos = _settings.GlobalSettings().TabPosition();
+        auto sidebar = this->VerticalTabSidebar();
+        auto grip = this->SidebarResizeGrip();
+
+        if (tabPos == TabPosition::Top)
+        {
+            // Top mode: hide sidebar/grip, show TabRow normally
+            if (sidebar)
+            {
+                sidebar.Visibility(WUX::Visibility::Collapsed);
+            }
+            if (grip)
+            {
+                grip.Visibility(WUX::Visibility::Collapsed);
+            }
+            if (_tabRow)
+            {
+                _tabRow.ClearValue(WUX::FrameworkElement::HeightProperty());
+                _tabRow.Opacity(1);
+                _tabRow.IsHitTestVisible(true);
+            }
+            // Hide left and right sidebar columns
+            this->LeftSidebarColumn().Width(WUX::GridLengthHelper::FromPixels(0));
+            this->RightSidebarColumn().Width(WUX::GridLengthHelper::FromPixels(0));
+        }
+        else
+        {
+            // Left or Right mode: show sidebar, hide TabRow
+            if (_tabRow)
+            {
+                _tabRow.Height(0);
+                _tabRow.Opacity(0);
+                _tabRow.IsHitTestVisible(false);
+            }
+
+            if (tabPos == TabPosition::Left)
+            {
+                // Sidebar in column 0 (left)
+                WUX::Controls::Grid::SetColumn(sidebar, 0);
+                WUX::Controls::Grid::SetColumn(grip, 0);
+                grip.HorizontalAlignment(WUX::HorizontalAlignment::Right);
+                this->LeftSidebarColumn().Width(WUX::GridLengthHelper::Auto());
+                this->RightSidebarColumn().Width(WUX::GridLengthHelper::FromPixels(0));
+            }
+            else // Right
+            {
+                // Sidebar in column 2 (right)
+                WUX::Controls::Grid::SetColumn(sidebar, 2);
+                WUX::Controls::Grid::SetColumn(grip, 2);
+                grip.HorizontalAlignment(WUX::HorizontalAlignment::Left);
+                this->LeftSidebarColumn().Width(WUX::GridLengthHelper::FromPixels(0));
+                this->RightSidebarColumn().Width(WUX::GridLengthHelper::Auto());
+            }
+
+            if (sidebar)
+            {
+                sidebar.Visibility(WUX::Visibility::Visible);
+            }
+            if (grip)
+            {
+                grip.Visibility(WUX::Visibility::Visible);
+            }
         }
     }
 }

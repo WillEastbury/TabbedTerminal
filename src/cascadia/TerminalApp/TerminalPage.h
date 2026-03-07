@@ -481,6 +481,7 @@ namespace winrt::TerminalApp::implementation
         void _OnSidebarResizePointerReleased(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _OnSidebarResizePointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _OnSidebarResizePointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _ApplyTabPosition();
 
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);
