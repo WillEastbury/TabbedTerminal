@@ -11,6 +11,9 @@
 #include <til/unicode.h>
 #include <Utils.h>
 
+#include <fstream>
+#include <filesystem>
+
 #include "../../types/inc/ColorFix.hpp"
 #include "../../types/inc/utils.hpp"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
@@ -2317,6 +2320,7 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
+        _SaveFleetState();
         CloseWindowRequested.raise(*this, nullptr);
     }
 
@@ -2828,10 +2832,10 @@ namespace winrt::TerminalApp::implementation
         {
             if (const auto tab{ _GetFocusedTab() })
             {
-                return tab.Title();
+                return L"TabbedTerminal: " + tab.Title();
             }
         }
-        return { L"Terminal" };
+        return { L"TabbedTerminal" };
     }
 
     // Method Description:
@@ -5825,22 +5829,9 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // Title — use the profile name if available, fall back to tab title
+        // Title — use the dynamic tab title (same as taskbar)
         auto textBlock = WUX::Controls::TextBlock();
-        winrt::hstring displayTitle = tab.Title();
-        if (tabImpl)
-        {
-            auto profile = tabImpl->GetFocusedProfile();
-            if (profile)
-            {
-                auto profileName = profile.Name();
-                if (!profileName.empty())
-                {
-                    displayTitle = profileName;
-                }
-            }
-        }
-        textBlock.Text(displayTitle);
+        textBlock.Text(tab.Title());
         textBlock.TextTrimming(WUX::TextTrimming::CharacterEllipsis);
         textBlock.VerticalAlignment(WUX::VerticalAlignment::Center);
         WUX::Controls::Grid::SetColumn(textBlock, 2);
@@ -5939,17 +5930,7 @@ namespace winrt::TerminalApp::implementation
                         {
                             if (auto tb = child.try_as<WUX::Controls::TextBlock>())
                             {
-                                // Use profile name if available, else tab title
-                                winrt::hstring title = t.Title();
-                                if (auto tImpl = _GetTabImpl(t))
-                                {
-                                    auto prof = tImpl->GetFocusedProfile();
-                                    if (prof && !prof.Name().empty())
-                                    {
-                                        title = prof.Name();
-                                    }
-                                }
-                                tb.Text(title);
+                                tb.Text(t.Title());
                                 break;
                             }
                         }
@@ -6236,5 +6217,153 @@ namespace winrt::TerminalApp::implementation
                 grip.Visibility(WUX::Visibility::Visible);
             }
         }
+    }
+
+    // Fleet Copilot Mode: Launch N instances of the copilot profile
+    void TerminalPage::_OnFleetLaunchClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        for (int i = 0; i < FleetDefaultCount; i++)
+        {
+            NewTerminalArgs args;
+            args.Profile(winrt::hstring{ FleetProfileName });
+            _OpenNewTerminalViaDropdown(args);
+        }
+    }
+
+    // Fleet Copilot Mode: Restore previous fleet from saved state
+    void TerminalPage::_OnFleetRestoreClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        _RestoreFleetState();
+    }
+
+    // Fleet Copilot Mode: Save session IDs of running copilot tabs
+    void TerminalPage::_SaveFleetState()
+    {
+        try
+        {
+            namespace fs = std::filesystem;
+
+            // Scan ~/.copilot/session-state/ for session folders
+            auto userProfile = wil::GetEnvironmentVariableW<std::wstring>(L"USERPROFILE");
+            fs::path sessionDir = fs::path(userProfile) / L".copilot" / L"session-state";
+
+            if (!fs::exists(sessionDir))
+                return;
+
+            // Collect all session IDs with their updated_at timestamps
+            struct SessionInfo
+            {
+                std::wstring id;
+                fs::file_time_type lastModified;
+            };
+            std::vector<SessionInfo> sessions;
+
+            for (const auto& entry : fs::directory_iterator(sessionDir))
+            {
+                if (!entry.is_directory())
+                    continue;
+
+                auto workspaceFile = entry.path() / L"workspace.yaml";
+                if (fs::exists(workspaceFile))
+                {
+                    sessions.push_back({ entry.path().filename().wstring(), fs::last_write_time(workspaceFile) });
+                }
+            }
+
+            // Sort by most recently modified
+            std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) {
+                return a.lastModified > b.lastModified;
+            });
+
+            // Count how many copilot tabs are open (match by profile name)
+            uint32_t copilotTabCount = 0;
+            for (uint32_t i = 0; i < _tabs.Size(); i++)
+            {
+                auto tab = _tabs.GetAt(i);
+                if (auto tabImpl = _GetTabImpl(tab))
+                {
+                    auto profile = tabImpl->GetFocusedProfile();
+                    if (profile && profile.Name() == FleetProfileName)
+                    {
+                        copilotTabCount++;
+                    }
+                }
+            }
+
+            if (copilotTabCount == 0)
+                return;
+
+            // Take the N most recent sessions (matching the number of copilot tabs)
+            auto localAppData = wil::GetEnvironmentVariableW<std::wstring>(L"LOCALAPPDATA");
+            fs::path fleetDir = fs::path(localAppData) / L"TabbedTerminal";
+            fs::create_directories(fleetDir);
+            fs::path fleetFile = fleetDir / L"fleet-state.json";
+
+            std::wofstream outFile(fleetFile);
+            if (!outFile.is_open())
+                return;
+
+            // Write a simple JSON array of session IDs
+            outFile << L"[" << std::endl;
+            auto count = std::min(static_cast<size_t>(copilotTabCount), sessions.size());
+            for (size_t i = 0; i < count; i++)
+            {
+                outFile << L"  \"" << sessions[i].id << L"\"";
+                if (i + 1 < count)
+                    outFile << L",";
+                outFile << std::endl;
+            }
+            outFile << L"]" << std::endl;
+        }
+        CATCH_LOG();
+    }
+
+    // Fleet Copilot Mode: Restore tabs from saved fleet state
+    void TerminalPage::_RestoreFleetState()
+    {
+        try
+        {
+            namespace fs = std::filesystem;
+
+            auto localAppData = wil::GetEnvironmentVariableW<std::wstring>(L"LOCALAPPDATA");
+            fs::path fleetFile = fs::path(localAppData) / L"TabbedTerminal" / L"fleet-state.json";
+
+            if (!fs::exists(fleetFile))
+                return;
+
+            // Read session IDs from the fleet state file
+            std::wifstream inFile(fleetFile);
+            if (!inFile.is_open())
+                return;
+
+            std::vector<std::wstring> sessionIds;
+            std::wstring line;
+            while (std::getline(inFile, line))
+            {
+                // Extract session ID from JSON-like format: "uuid-here"
+                auto firstQuote = line.find(L'"');
+                auto lastQuote = line.rfind(L'"');
+                if (firstQuote != std::wstring::npos && lastQuote != std::wstring::npos && lastQuote > firstQuote)
+                {
+                    auto id = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
+                    if (!id.empty() && id.find(L'-') != std::wstring::npos) // basic UUID check
+                    {
+                        sessionIds.push_back(id);
+                    }
+                }
+            }
+
+            // Launch a copilot tab for each saved session with --resume=<id>
+            for (const auto& sessionId : sessionIds)
+            {
+                NewTerminalArgs args;
+                args.Profile(winrt::hstring{ FleetProfileName });
+                // Override commandline to restore the specific session
+                auto cmdline = L"cmd.exe /k \"copilot --alt-screen --resume=" + sessionId + L"\"";
+                args.Commandline(winrt::hstring{ cmdline });
+                _OpenNewTerminalViaDropdown(args);
+            }
+        }
+        CATCH_LOG();
     }
 }

@@ -483,6 +483,14 @@ namespace winrt::TerminalApp::implementation
         void _OnSidebarResizePointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _ApplyTabPosition();
 
+        // Fleet copilot mode
+        void _OnFleetLaunchClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _OnFleetRestoreClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _SaveFleetState();
+        void _RestoreFleetState();
+        static constexpr std::wstring_view FleetProfileName{ L"GH Copilot CLI (New)" };
+        static constexpr int FleetDefaultCount{ 10 };
+
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);
         void _OnSwitchToTabRequested(const IInspectable& sender, const winrt::TerminalApp::Tab& tab);
