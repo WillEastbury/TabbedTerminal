@@ -300,6 +300,14 @@ void AppHost::Initialize()
 
     _window->UpdateTitle(_windowLogic.Title());
 
+    // Update the titlebar text for custom chrome windows
+    if (_useNonClientArea)
+    {
+        auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
+        nonClientWindow->SetTitlebarText(_windowLogic.Title());
+        nonClientWindow->ShowTitlebarText(true);
+    }
+
     // Set up the content of the application. If the app has a custom titlebar,
     // set that content as well.
     _window->SetContent(_windowLogic.GetRoot());
@@ -398,7 +406,15 @@ void AppHost::_revokeWindowCallbacks()
 //   a window message so we can update the window's title on the main thread.
 void AppHost::_AppTitleChanged(const winrt::Windows::Foundation::IInspectable& /*sender*/, const winrt::Windows::Foundation::IInspectable& /*args*/)
 {
-    _window->UpdateTitle(_windowLogic.Title());
+    const auto title = _windowLogic.Title();
+    _window->UpdateTitle(title);
+
+    // Also update the titlebar text displayed in the custom chrome
+    if (_useNonClientArea)
+    {
+        auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
+        nonClientWindow->SetTitlebarText(title);
+    }
 }
 
 // The terminal page is responsible for persisting its own state, but it does

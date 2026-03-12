@@ -23,6 +23,9 @@ namespace winrt::TerminalApp::implementation
         IInspectable Content();
         void Content(IInspectable content);
 
+        void SetTitleText(const winrt::hstring& text);
+        void ShowTitleText(bool show);
+
         void SetWindowVisualState(WindowVisualState visualState);
         void Root_SizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& e);
         void FullscreenChanged(const bool fullscreen);

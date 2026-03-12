@@ -33,5 +33,8 @@ namespace TerminalApp
 
         IInspectable Content;
         Windows.UI.Xaml.Controls.Border DragBar { get; };
+
+        void SetTitleText(String text);
+        void ShowTitleText(Boolean show);
     }
 }

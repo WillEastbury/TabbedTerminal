@@ -73,6 +73,16 @@ namespace winrt::TerminalApp::implementation
         ContentRoot().Content(content);
     }
 
+    void TitlebarControl::SetTitleText(const winrt::hstring& text)
+    {
+        TitleTextBlock().Text(text);
+    }
+
+    void TitlebarControl::ShowTitleText(bool show)
+    {
+        TitleTextBlock().Visibility(show ? Visibility::Visible : Visibility::Collapsed);
+    }
+
     void TitlebarControl::Root_SizeChanged(const IInspectable& /*sender*/,
                                            const Windows::UI::Xaml::SizeChangedEventArgs& /*e*/)
     {

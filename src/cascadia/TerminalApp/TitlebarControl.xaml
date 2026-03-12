@@ -37,7 +37,17 @@
     <Border x:Name="DragBar"
             Grid.Column="1"
             MinWidth="45.0"
-            DoubleTapped="DragBar_DoubleTapped" />
+            DoubleTapped="DragBar_DoubleTapped">
+        <TextBlock x:Name="TitleTextBlock"
+                   Margin="12,0,0,0"
+                   VerticalAlignment="Center"
+                   FontSize="12"
+                   Foreground="{ThemeResource SystemControlForegroundBaseHighBrush}"
+                   IsHitTestVisible="False"
+                   Text=""
+                   TextTrimming="CharacterEllipsis"
+                   Visibility="Collapsed" />
+    </Border>
 
     <local:MinMaxCloseControl x:Name="MinMaxCloseControl"
                               Grid.Column="2"
