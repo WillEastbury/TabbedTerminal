@@ -43,6 +43,8 @@ static constexpr std::string_view ThemesKey{ "themes" };
 constexpr std::wstring_view systemThemeName{ L"system" };
 constexpr std::wstring_view darkThemeName{ L"dark" };
 constexpr std::wstring_view lightThemeName{ L"light" };
+constexpr std::wstring_view duskyThemeName{ L"dusky" };
+constexpr std::wstring_view purpleThemeName{ L"purple" };
 constexpr std::wstring_view legacySystemThemeName{ L"legacySystem" };
 constexpr std::wstring_view legacyDarkThemeName{ L"legacyDark" };
 constexpr std::wstring_view legacyLightThemeName{ L"legacyLight" };
@@ -50,6 +52,8 @@ constexpr std::wstring_view legacyLightThemeName{ L"legacyLight" };
 static constexpr std::array builtinThemes{
     systemThemeName,
     lightThemeName,
+    duskyThemeName,
+    purpleThemeName,
     darkThemeName,
     legacySystemThemeName,
     legacyLightThemeName,
@@ -1326,19 +1330,23 @@ void CascadiaSettings::_researchOnLoad()
         // system (legacy): 4
         // light (legacy): 5
         // dark (legacy): 6
+        // dusky: 7
+        // purple: 8
         const auto themeChoice = themeInUse == L"system"       ? 0 :
                                  themeInUse == L"light"        ? 1 :
                                  themeInUse == L"dark"         ? 2 :
                                  themeInUse == L"legacyDark"   ? 4 :
                                  themeInUse == L"legacyLight"  ? 5 :
                                  themeInUse == L"legacySystem" ? 6 :
+                                 themeInUse == L"dusky"        ? 7 :
+                                 themeInUse == L"purple"       ? 8 :
                                                                  3;
 
         TraceLoggingWrite(
             g_hSettingsModelProvider,
             "ThemesInUse",
             TraceLoggingDescription("Data about the themes in use"),
-            TraceLoggingInt32(themeChoice, "ThemeClass", "Identifier for the theme chosen. 0 is system (legacySystem = 6), 1 is light (legacyLight = 5), 2 is dark (legacyDark = 4), and 3 indicates any custom theme."),
+            TraceLoggingInt32(themeChoice, "ThemeClass", "Identifier for the theme chosen. 0 is system (legacySystem = 6), 1 is light (legacyLight = 5), 2 is dark (legacyDark = 4), 7 is dusky, 8 is purple, and 3 indicates any custom theme."),
             TraceLoggingBool(changedTheme, "ChangedTheme", "True if the user actually changed the theme from the default theme"),
             TraceLoggingInt32(numThemes, "NumberOfThemes", "Number of themes in the user's settings"),
             TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),

@@ -637,6 +637,14 @@
     <value>Application Theme</value>
     <comment>Header for a control to choose the theme colors used in the app.</comment>
   </data>
+  <data name="Globals_ThemeDusky.Content" xml:space="preserve">
+    <value>Dusky</value>
+    <comment>An option to choose from for the "theme" setting. When selected, the app uses a dark beige theme with warm, muted tones throughout the chrome.</comment>
+  </data>
+  <data name="Globals_ThemePurple.Content" xml:space="preserve">
+    <value>Purple</value>
+    <comment>An option to choose from for the "theme" setting. When selected, the app uses a vibrant purple theme with bold, garish purple tones throughout the chrome.</comment>
+  </data>
   <data name="Globals_ThemeDark.Content" xml:space="preserve">
     <value>Dark</value>
     <comment>An option to choose from for the "theme" setting. When selected, the app is in dark theme and darker colors are used throughout the app.</comment>

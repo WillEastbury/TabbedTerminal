@@ -458,6 +458,36 @@
             }
         },
         {
+            "name": "dusky",
+            "window": {
+                "applicationTheme": "dark",
+                "frame": "#6B5B4D"
+            },
+            "tab": {
+                "background": "terminalBackground",
+                "unfocusedBackground": "#00000000"
+            },
+            "tabRow": {
+                "background": "#6B5B4DFF",
+                "unfocusedBackground": "#5A4A3AFF"
+            }
+        },
+        {
+            "name": "purple",
+            "window": {
+                "applicationTheme": "dark",
+                "frame": "#7B2D8E"
+            },
+            "tab": {
+                "background": "terminalBackground",
+                "unfocusedBackground": "#00000000"
+            },
+            "tabRow": {
+                "background": "#7B2D8EFF",
+                "unfocusedBackground": "#5C1A6EFF"
+            }
+        },
+        {
             "name": "dark",
             "window": {
                 "applicationTheme": "dark"

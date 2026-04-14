@@ -18,6 +18,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     constexpr std::wstring_view systemThemeName{ L"system" };
     constexpr std::wstring_view darkThemeName{ L"dark" };
     constexpr std::wstring_view lightThemeName{ L"light" };
+    constexpr std::wstring_view duskyThemeName{ L"dusky" };
+    constexpr std::wstring_view purpleThemeName{ L"purple" };
     constexpr std::wstring_view legacySystemThemeName{ L"legacySystem" };
     constexpr std::wstring_view legacyDarkThemeName{ L"legacyDark" };
     constexpr std::wstring_view legacyLightThemeName{ L"legacyLight" };
@@ -82,6 +84,14 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         else if (theme.Name() == lightThemeName)
         {
             return RS_(L"Globals_ThemeLight/Content");
+        }
+        else if (theme.Name() == duskyThemeName)
+        {
+            return RS_(L"Globals_ThemeDusky/Content");
+        }
+        else if (theme.Name() == purpleThemeName)
+        {
+            return RS_(L"Globals_ThemePurple/Content");
         }
         else if (theme.Name() == systemThemeName)
         {
