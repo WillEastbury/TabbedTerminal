@@ -25,6 +25,7 @@
 #include "SettingsPaneContent.h"
 #include "SnippetsPaneContent.h"
 #include "ColorPickupFlyout.h"
+#include "ContainerEnumerator.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
@@ -836,6 +837,72 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_ShowAboutDialog()
     {
         _ShowDialogHelper(L"AboutDialog");
+    }
+
+    void TerminalPage::_ShowContainerPickerDialog()
+    {
+        // Enumerate containers on a background thread, then show the dialog
+        auto weakThis = get_weak();
+
+        Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [weakThis]() {
+            auto self = weakThis.get();
+            if (!self)
+                return;
+
+            auto containers = ContainerEnumerator::EnumerateAll();
+
+            // Build a list of display items for the ListView
+            auto items = winrt::single_threaded_observable_vector<IInspectable>();
+            for (const auto& c : containers)
+            {
+                auto props = winrt::Windows::Foundation::Collections::PropertySet();
+                props.Insert(L"Name", winrt::box_value(winrt::hstring(c.name)));
+                props.Insert(L"Image", winrt::box_value(winrt::hstring(c.image)));
+                props.Insert(L"State", winrt::box_value(winrt::hstring(c.state)));
+                props.Insert(L"Provider", winrt::box_value(winrt::hstring(
+                    c.provider == ContainerProvider::Docker ? L"Docker" : L"Hyper-V")));
+                props.Insert(L"Id", winrt::box_value(winrt::hstring(c.id)));
+                props.Insert(L"ProviderType", winrt::box_value(static_cast<int32_t>(c.provider)));
+                items.Append(props);
+            }
+
+            // Store items for the click handler
+            self->_containerItems = std::move(containers);
+
+            if (auto listView = self->ContainerListView())
+            {
+                listView.ItemsSource(items);
+            }
+
+            if (auto noResults = self->ContainerPickerNoResults())
+            {
+                noResults.Visibility(containers.empty() ? Visibility::Visible : Visibility::Collapsed);
+            }
+
+            self->_ShowDialogHelper(L"ContainerPickerDialog");
+        });
+    }
+
+    void TerminalPage::_ContainerPickerConnectClick(
+        const WUX::Controls::ContentDialog& /*sender*/,
+        const WUX::Controls::ContentDialogButtonClickEventArgs& /*args*/)
+    {
+        if (auto listView = ContainerListView())
+        {
+            auto selectedIndex = listView.SelectedIndex();
+            if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < _containerItems.size())
+            {
+                const auto& container = _containerItems[selectedIndex];
+                auto cmdline = ContainerEnumerator::BuildExecCommand(container);
+
+                // Use ExecuteCommandline to open a new tab with the container command
+                // This is equivalent to: wt new-tab -- <cmdline>
+                auto commandLine = L"new-tab --title \"" + container.name + L"\" -- " + cmdline;
+                ExecuteCommandlineArgs execArgs{ winrt::hstring(commandLine) };
+                ActionAndArgs actionAndArgs{ ShortcutAction::ExecuteCommandline, execArgs };
+                _actionDispatch->DoAction(actionAndArgs);
+            }
+        }
     }
 
     winrt::hstring TerminalPage::ApplicationDisplayName()

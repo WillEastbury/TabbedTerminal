@@ -740,6 +740,10 @@
   <data name="OpenCWDCommandKey" xml:space="preserve">
     <value>Open current working directory</value>
   </data>
+  <data name="OpenContainerPickerCommandKey" xml:space="preserve">
+    <value>Connect to container...</value>
+    <comment>This will open a picker to connect to a Docker container or Hyper-V VM</comment>
+  </data>
   <data name="CloseTab" xml:space="preserve">
     <value>Close tab</value>
   </data>

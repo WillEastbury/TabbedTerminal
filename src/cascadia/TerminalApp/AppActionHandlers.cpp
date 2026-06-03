@@ -1624,6 +1624,13 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
+    void TerminalPage::_HandleOpenContainerPicker(const IInspectable& /*sender*/,
+                                                  const ActionEventArgs& args)
+    {
+        _ShowContainerPickerDialog();
+        args.Handled(true);
+    }
+
     void TerminalPage::_HandleQuickFix(const IInspectable& /*sender*/,
                                        const ActionEventArgs& args)
     {

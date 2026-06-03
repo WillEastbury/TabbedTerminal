@@ -568,6 +568,7 @@
         { "command": "quit", "id": "Terminal.Quit" },
         { "command": "restoreLastClosed", "id": "Terminal.RestoreLastClosed" },
         { "command": "openAbout", "id": "Terminal.OpenAboutDialog" },
+        { "command": "openContainerPicker", "id": "Terminal.OpenContainerPicker" },
         { "command": "experimental.openTasks", "id": "Terminal.OpenTasks" },
         { "command": "quickFix", "id": "Terminal.QuickFix" },
         { "command": { "action": "showSuggestions", "source": "all"}, "id": "Terminal.Suggestions" },

@@ -13,6 +13,7 @@
 #include "RequestMoveContentArgs.g.h"
 #include "LaunchPositionRequest.g.h"
 #include "Toast.h"
+#include "ContainerEnumerator.h"
 
 #include "WindowsPackageManagerFactory.h"
 
@@ -267,6 +268,8 @@ namespace winrt::TerminalApp::implementation
         // use a weak reference to prevent circular dependency with AppLogic
         winrt::weak_ref<winrt::TerminalApp::IDialogPresenter> _dialogPresenter;
 
+        std::vector<implementation::ContainerInfo> _containerItems;
+
         winrt::com_ptr<AppKeyBindings> _bindings{ winrt::make_self<implementation::AppKeyBindings>() };
         winrt::com_ptr<ShortcutActionDispatch> _actionDispatch{ winrt::make_self<implementation::ShortcutActionDispatch>() };
 
@@ -308,6 +311,8 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> _ShowDialogHelper(const std::wstring_view& name);
 
         void _ShowAboutDialog();
+        void _ShowContainerPickerDialog();
+        void _ContainerPickerConnectClick(const winrt::Windows::UI::Xaml::Controls::ContentDialog& sender, const winrt::Windows::UI::Xaml::Controls::ContentDialogButtonClickEventArgs& args);
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> _ShowQuitDialog();
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> _ShowCloseWarningDialog();
         winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::UI::Xaml::Controls::ContentDialogResult> _ShowCloseReadOnlyDialog();

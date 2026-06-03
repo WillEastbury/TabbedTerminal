@@ -167,6 +167,7 @@
     <ClInclude Include="ScratchpadContent.h">
       <DependentUpon>TerminalPaneContent.idl</DependentUpon>
     </ClInclude>
+    <ClInclude Include="ContainerEnumerator.h" />
     <ClInclude Include="SnippetsPaneContent.h">
       <DependentUpon>SnippetsPaneContent.xaml</DependentUpon>
     </ClInclude>
@@ -279,6 +280,7 @@
     <ClCompile Include="ScratchpadContent.cpp">
       <DependentUpon>TerminalPaneContent.idl</DependentUpon>
     </ClCompile>
+    <ClCompile Include="ContainerEnumerator.cpp" />
     <ClCompile Include="SnippetsPaneContent.cpp">
       <DependentUpon>SnippetsPaneContent.xaml</DependentUpon>
     </ClCompile>
