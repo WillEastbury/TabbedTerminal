@@ -491,13 +491,19 @@ namespace winrt::TerminalApp::implementation
         void _OnSidebarResizePointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _ApplyTabPosition();
 
-        // Fleet copilot mode
-        void _OnFleetLaunchClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
-        void _OnFleetRestoreClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
-        void _SaveFleetState();
-        void _RestoreFleetState();
-        static constexpr std::wstring_view FleetProfileName{ L"GH Copilot CLI (New)" };
-        static constexpr int FleetDefaultCount{ 10 };
+        // Copilot session picker
+        void _OnCopilotSessionPickerClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _ShowCopilotSessionPicker();
+        struct CopilotSessionInfo
+        {
+            std::wstring id;
+            std::wstring summary;
+            std::wstring repository;
+            std::wstring agentName;
+            std::wstring updatedAt;
+        };
+        std::vector<CopilotSessionInfo> _copilotSessions;
+        std::vector<CopilotSessionInfo> _EnumerateCopilotSessions();
 
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);

@@ -60,39 +60,22 @@
                     FontFamily="{ThemeResource SymbolThemeFontFamily}"
                     FontSize="12" />
 
-            <!-- Fleet buttons -->
-            <Grid Grid.Row="2" Margin="4,2,4,2">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <Button x:Name="FleetLaunchButton"
-                        Grid.Column="0"
-                        Margin="0,0,2,0"
-                        Padding="8,6"
-                        HorizontalAlignment="Stretch"
-                        Click="_OnFleetLaunchClick"
-                        ToolTipService.ToolTip="Launch Copilot Fleet">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <TextBlock Text="&#xE7EE;"
-                                   FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                   FontSize="12" />
-                    </StackPanel>
-                </Button>
-                <Button x:Name="FleetRestoreButton"
-                        Grid.Column="1"
-                        Margin="2,0,0,0"
-                        Padding="8,6"
-                        HorizontalAlignment="Stretch"
-                        Click="_OnFleetRestoreClick"
-                        ToolTipService.ToolTip="Restore Previous Fleet">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <TextBlock Text="&#xE72C;"
-                                   FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                   FontSize="12" />
-                    </StackPanel>
-                </Button>
-            </Grid>
+            <!-- Copilot Session button -->
+            <Button x:Name="CopilotSessionButton"
+                    Grid.Row="2"
+                    Margin="4,2,4,2"
+                    Padding="8,6"
+                    HorizontalAlignment="Stretch"
+                    Click="_OnCopilotSessionPickerClick"
+                    ToolTipService.ToolTip="Resume Copilot Session">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="6">
+                    <TextBlock Text="&#xE943;"
+                               FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                               FontSize="12" />
+                    <TextBlock Text="Sessions"
+                               FontSize="11" />
+                </StackPanel>
+            </Button>
 
             <Button x:Name="VerticalSettingsButton"
                     Grid.Row="3"
