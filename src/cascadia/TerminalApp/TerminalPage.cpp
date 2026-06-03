@@ -893,14 +893,88 @@ namespace winrt::TerminalApp::implementation
             if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < _containerItems.size())
             {
                 const auto& container = _containerItems[selectedIndex];
+
+                // If the container is stopped, start it first
+                if (container.state != L"running" && container.state != L"Running")
+                {
+                    ContainerEnumerator::StartContainer(container);
+                }
+
                 auto cmdline = ContainerEnumerator::BuildExecCommand(container);
 
                 // Use ExecuteCommandline to open a new tab with the container command
-                // This is equivalent to: wt new-tab -- <cmdline>
                 auto commandLine = L"new-tab --title \"" + container.name + L"\" -- " + cmdline;
                 ExecuteCommandlineArgs execArgs{ winrt::hstring(commandLine) };
                 ActionAndArgs actionAndArgs{ ShortcutAction::ExecuteCommandline, execArgs };
                 _actionDispatch->DoAction(actionAndArgs);
+            }
+        }
+    }
+
+    void TerminalPage::_ContainerPickerStartClick(
+        const WUX::Controls::ContentDialog& /*sender*/,
+        const WUX::Controls::ContentDialogButtonClickEventArgs& /*args*/)
+    {
+        // Start the selected container without connecting
+        if (auto listView = ContainerListView())
+        {
+            auto selectedIndex = listView.SelectedIndex();
+            if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < _containerItems.size())
+            {
+                const auto& container = _containerItems[selectedIndex];
+                ContainerEnumerator::StartContainer(container);
+                // Re-show the dialog with updated state
+                _ShowContainerPickerDialog();
+            }
+        }
+    }
+
+    void TerminalPage::_ContainerPickerCreateClick(
+        const winrt::Windows::Foundation::IInspectable& /*sender*/,
+        const WUX::RoutedEventArgs& /*args*/)
+    {
+        if (auto textBox = ContainerImageTextBox())
+        {
+            auto imageName = textBox.Text();
+            if (!imageName.empty())
+            {
+                auto imageStr = std::wstring(imageName);
+                // Create and start the container, then connect
+                if (ContainerEnumerator::CreateAndStartContainer(imageStr))
+                {
+                    // Re-enumerate to find the new container and connect
+                    auto containers = ContainerEnumerator::EnumerateDocker();
+                    if (!containers.empty())
+                    {
+                        // Connect to the most recently created container (first in list)
+                        const auto& container = containers.front();
+                        auto cmdline = ContainerEnumerator::BuildExecCommand(container);
+                        auto commandLine = L"new-tab --title \"" + container.name + L"\" -- " + cmdline;
+                        ExecuteCommandlineArgs execArgs{ winrt::hstring(commandLine) };
+                        ActionAndArgs actionAndArgs{ ShortcutAction::ExecuteCommandline, execArgs };
+                        _actionDispatch->DoAction(actionAndArgs);
+                    }
+                }
+            }
+        }
+    }
+
+    void TerminalPage::_ContainerPickerSelectionChanged(
+        const winrt::Windows::Foundation::IInspectable& /*sender*/,
+        const WUX::Controls::SelectionChangedEventArgs& /*args*/)
+    {
+        // Update the secondary button text based on whether the selected container is stopped
+        if (auto dialog = FindName(L"ContainerPickerDialog").try_as<WUX::Controls::ContentDialog>())
+        {
+            if (auto listView = ContainerListView())
+            {
+                auto selectedIndex = listView.SelectedIndex();
+                if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < _containerItems.size())
+                {
+                    const auto& container = _containerItems[selectedIndex];
+                    bool isStopped = (container.state != L"running" && container.state != L"Running");
+                    dialog.IsSecondaryButtonEnabled(isStopped);
+                }
             }
         }
     }

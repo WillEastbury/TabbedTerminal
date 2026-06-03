@@ -335,4 +335,121 @@ namespace winrt::TerminalApp::implementation
             return L"powershell.exe -NoProfile -Command \"Enter-PSSession -VMId " + container.id + L"\"";
         }
     }
+
+    std::string ContainerEnumerator::_PostDockerApi(const std::string& path, const std::string& body)
+    {
+        auto pipe = CreateFileW(
+            L"\\\\.\\pipe\\docker_engine",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            0,
+            nullptr);
+
+        if (pipe == INVALID_HANDLE_VALUE)
+        {
+            return {};
+        }
+
+        auto closePipe = wil::scope_exit([&] { CloseHandle(pipe); });
+
+        std::string request = "POST " + path + " HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body;
+        DWORD written = 0;
+        if (!WriteFile(pipe, request.c_str(), static_cast<DWORD>(request.size()), &written, nullptr))
+        {
+            return {};
+        }
+
+        // Read response
+        std::string response;
+        char buffer[4096];
+        DWORD bytesRead = 0;
+        while (ReadFile(pipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+        {
+            response.append(buffer, bytesRead);
+            if (response.find("\r\n\r\n") != std::string::npos)
+            {
+                break;
+            }
+        }
+        return response;
+    }
+
+    bool ContainerEnumerator::StartContainer(const ContainerInfo& container)
+    {
+        if (container.provider == ContainerProvider::Docker)
+        {
+            // POST /containers/{id}/start
+            std::string idNarrow;
+            idNarrow.reserve(container.id.size());
+            for (auto wc : container.id)
+                idNarrow.push_back(static_cast<char>(wc));
+            auto response = _PostDockerApi("/v1.41/containers/" + idNarrow + "/start");
+            // 204 No Content = success, 304 = already started
+            return response.find("204") != std::string::npos ||
+                   response.find("304") != std::string::npos;
+        }
+        else
+        {
+            // Hyper-V: Start-VM
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi{};
+            std::wstring cmd = L"powershell.exe -NoProfile -Command \"Start-VM -Id " + container.id + L"\"";
+            if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+            {
+                WaitForSingleObject(pi.hProcess, 10000);
+                DWORD exitCode = 1;
+                GetExitCodeProcess(pi.hProcess, &exitCode);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                return exitCode == 0;
+            }
+            return false;
+        }
+    }
+
+    bool ContainerEnumerator::CreateAndStartContainer(const std::wstring& image)
+    {
+        // Use docker run -dit <image> to create and start a new container in detached interactive mode
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+
+        HANDLE hReadPipe, hWritePipe;
+        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+        {
+            return false;
+        }
+        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = hWritePipe;
+        si.hStdError = hWritePipe;
+
+        PROCESS_INFORMATION pi{};
+        std::wstring cmd = L"docker run -dit " + image;
+
+        if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        {
+            CloseHandle(hReadPipe);
+            CloseHandle(hWritePipe);
+            return false;
+        }
+
+        CloseHandle(hWritePipe);
+        WaitForSingleObject(pi.hProcess, 30000);
+
+        DWORD exitCode = 1;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(hReadPipe);
+
+        return exitCode == 0;
+    }
 }

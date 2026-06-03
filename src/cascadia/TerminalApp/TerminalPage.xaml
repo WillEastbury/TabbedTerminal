@@ -258,12 +258,14 @@
                            Grid.Row="2"
                            x:Load="False"
                            DefaultButton="Primary"
-                           PrimaryButtonClick="_ContainerPickerConnectClick">
+                           PrimaryButtonClick="_ContainerPickerConnectClick"
+                           SecondaryButtonClick="_ContainerPickerStartClick">
                 <StackPanel Orientation="Vertical"
                             MinWidth="400">
                     <ListView x:Name="ContainerListView"
                               MaxHeight="300"
-                              SelectionMode="Single">
+                              SelectionMode="Single"
+                              SelectionChanged="_ContainerPickerSelectionChanged">
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal"
@@ -298,6 +300,25 @@
                                 Padding="8">
                         <TextBlock x:Uid="ContainerPickerNoContainers"
                                    TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Orientation="Vertical"
+                                Margin="0,12,0,0"
+                                Spacing="4"
+                                BorderThickness="0,1,0,0"
+                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                Padding="0,12,0,0">
+                        <TextBlock x:Uid="ContainerPickerNewHeader"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8">
+                            <TextBox x:Name="ContainerImageTextBox"
+                                     x:Uid="ContainerPickerImageInput"
+                                     MinWidth="250" />
+                            <Button x:Name="ContainerCreateButton"
+                                    x:Uid="ContainerPickerCreateButton"
+                                    Click="_ContainerPickerCreateClick"
+                                    Style="{StaticResource AccentButtonStyle}" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </ContentDialog>

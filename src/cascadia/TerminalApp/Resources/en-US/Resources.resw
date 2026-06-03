@@ -478,11 +478,23 @@
   <data name="ContainerPickerDialog.PrimaryButtonText" xml:space="preserve">
     <value>Connect</value>
   </data>
+  <data name="ContainerPickerDialog.SecondaryButtonText" xml:space="preserve">
+    <value>Start</value>
+  </data>
   <data name="ContainerPickerDialog.CloseButtonText" xml:space="preserve">
     <value>Cancel</value>
   </data>
   <data name="ContainerPickerNoContainers.Text" xml:space="preserve">
     <value>No containers or VMs found. Make sure Docker Desktop is running or Hyper-V is enabled.</value>
+  </data>
+  <data name="ContainerPickerNewHeader.Text" xml:space="preserve">
+    <value>Create new container</value>
+  </data>
+  <data name="ContainerPickerImageInput.PlaceholderText" xml:space="preserve">
+    <value>Image name (e.g. ubuntu:latest)</value>
+  </data>
+  <data name="ContainerPickerCreateButton.Content" xml:space="preserve">
+    <value>Create &amp; Connect</value>
   </data>
   <data name="AboutDialog_VersionLabel.Text" xml:space="preserve">
     <value>Version:</value>

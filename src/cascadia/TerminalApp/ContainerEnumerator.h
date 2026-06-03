@@ -30,8 +30,11 @@ namespace winrt::TerminalApp::implementation
         static std::vector<ContainerInfo> EnumerateDocker();
         static std::vector<ContainerInfo> EnumerateHyperV();
         static std::wstring BuildExecCommand(const ContainerInfo& container);
+        static bool StartContainer(const ContainerInfo& container);
+        static bool CreateAndStartContainer(const std::wstring& image);
 
     private:
         static std::string _QueryDockerApi(const std::string& path);
+        static std::string _PostDockerApi(const std::string& path, const std::string& body = "");
     };
 }
