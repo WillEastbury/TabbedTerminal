@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <set>
@@ -37,10 +38,11 @@ enum class Tab
     Apps,
     Containers,
     NewContainer,
+    Serial,
     COUNT
 };
 
-static const wchar_t* TabNames[] = { L"Sessions", L"Apps", L"Containers", L"New Container" };
+static const wchar_t* TabNames[(int)Tab::COUNT] = { L"Sessions", L"Apps", L"Containers", L"New Container", L"Serial" };
 
 // ─── Terminal Helpers ────────────────────────────────────────────────────────
 
@@ -371,6 +373,62 @@ std::string runDockerCapture(DockerBackend backend, const std::wstring& args)
 static DockerBackend g_activeBackend = DockerBackend::None;
 
 // ─── Data Providers ─────────────────────────────────────────────────────────
+
+bool isSerialPortName(const std::wstring& deviceName)
+{
+    if (deviceName.size() <= 3 || _wcsnicmp(deviceName.c_str(), L"COM", 3) != 0)
+        return false;
+
+    for (size_t i = 3; i < deviceName.size(); i++)
+    {
+        if (deviceName[i] < L'0' || deviceName[i] > L'9')
+            return false;
+    }
+
+    return true;
+}
+
+int getSerialPortNumber(const std::wstring& portName)
+{
+    return _wtoi(portName.c_str() + 3);
+}
+
+std::vector<ListItem> enumerateSerialPorts()
+{
+    std::vector<ListItem> items;
+
+    wchar_t devices[65536] = {};
+    auto length = QueryDosDeviceW(nullptr, devices, ARRAYSIZE(devices));
+    if (length == 0)
+        return items;
+
+    const wchar_t* current = devices;
+    while (*current != L'\0')
+    {
+        std::wstring deviceName = current;
+        if (isSerialPortName(deviceName))
+        {
+            ListItem item{};
+            item.name = deviceName;
+            item.detail = L"115200 8N1";
+            item.timestamp = L"Serial";
+            item.command = deviceName;
+            items.push_back(std::move(item));
+        }
+
+        current += deviceName.size() + 1;
+    }
+
+    std::sort(items.begin(), items.end(), [](const auto& left, const auto& right) {
+        auto leftNumber = getSerialPortNumber(left.command);
+        auto rightNumber = getSerialPortNumber(right.command);
+        if (leftNumber != rightNumber)
+            return leftNumber < rightNumber;
+        return left.command < right.command;
+    });
+
+    return items;
+}
 
 std::vector<ListItem> enumerateSessions()
 {
@@ -917,7 +975,7 @@ void renderFooter(Tab currentTab, size_t checkedCount)
     }
     else
     {
-        wprintf(L"  [\u2191\u2193] Navigate  [Tab/1-4] Switch tab  [Enter] Select  [Esc] Cancel");
+        wprintf(L"  [\u2191\u2193] Navigate  [Tab/1-%d] Switch tab  [Enter] Select  [Esc] Cancel", (int)Tab::COUNT);
     }
     setThemeBg();
 }
@@ -971,12 +1029,342 @@ KeyEvent readKey()
         if (vk == VK_SPACE) return { KeyEvent::Space };
         if (vk == VK_BACK) return { KeyEvent::Char, L'\b' };
 
-        if (ch >= L'1' && ch <= L'4') return { KeyEvent::Number, 0, ch - L'0' };
+        if (ch >= L'1' && ch < (L'1' + (int)Tab::COUNT)) return { KeyEvent::Number, 0, ch - L'0' };
         if (ch >= 32) return { KeyEvent::Char, ch };
     }
 }
 
 // ─── Process Launch ─────────────────────────────────────────────────────────
+
+void waitForAnyKey(const wchar_t* prompt)
+{
+    wprintf(L"%ls", prompt);
+    _flushall();
+
+    FlushConsoleInputBuffer(hIn);
+
+    INPUT_RECORD rec{};
+    DWORD read = 0;
+    while (ReadConsoleInputW(hIn, &rec, 1, &read) && read > 0)
+    {
+        if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown)
+            break;
+    }
+}
+
+bool writeAll(HANDLE handle, const void* data, DWORD size)
+{
+    const auto* bytes = static_cast<const BYTE*>(data);
+    DWORD totalWritten = 0;
+    while (totalWritten < size)
+    {
+        DWORD written = 0;
+        if (!WriteFile(handle, bytes + totalWritten, size - totalWritten, &written, nullptr))
+            return false;
+        if (written == 0)
+        {
+            SetLastError(ERROR_WRITE_FAULT);
+            return false;
+        }
+        totalWritten += written;
+    }
+    return true;
+}
+
+bool isHighSurrogateChar(wchar_t ch)
+{
+    return ch >= 0xD800 && ch <= 0xDBFF;
+}
+
+bool isLowSurrogateChar(wchar_t ch)
+{
+    return ch >= 0xDC00 && ch <= 0xDFFF;
+}
+
+bool tryGetSerialVtSequence(WORD vk, DWORD controlKeyState, const char*& sequence, DWORD& sequenceLength)
+{
+    sequence = nullptr;
+    sequenceLength = 0;
+
+    if (vk == VK_TAB && (controlKeyState & SHIFT_PRESSED))
+    {
+        sequence = "\x1b[Z";
+    }
+    else
+    {
+        switch (vk)
+        {
+        case VK_UP: sequence = "\x1b[A"; break;
+        case VK_DOWN: sequence = "\x1b[B"; break;
+        case VK_RIGHT: sequence = "\x1b[C"; break;
+        case VK_LEFT: sequence = "\x1b[D"; break;
+        case VK_HOME: sequence = "\x1b[H"; break;
+        case VK_END: sequence = "\x1b[F"; break;
+        case VK_INSERT: sequence = "\x1b[2~"; break;
+        case VK_DELETE: sequence = "\x1b[3~"; break;
+        case VK_PRIOR: sequence = "\x1b[5~"; break;
+        case VK_NEXT: sequence = "\x1b[6~"; break;
+        case VK_F1: sequence = "\x1bOP"; break;
+        case VK_F2: sequence = "\x1bOQ"; break;
+        case VK_F3: sequence = "\x1bOR"; break;
+        case VK_F4: sequence = "\x1bOS"; break;
+        case VK_F5: sequence = "\x1b[15~"; break;
+        case VK_F6: sequence = "\x1b[17~"; break;
+        case VK_F7: sequence = "\x1b[18~"; break;
+        case VK_F8: sequence = "\x1b[19~"; break;
+        case VK_F9: sequence = "\x1b[20~"; break;
+        case VK_F10: sequence = "\x1b[21~"; break;
+        case VK_F11: sequence = "\x1b[23~"; break;
+        case VK_F12: sequence = "\x1b[24~"; break;
+        default: break;
+        }
+    }
+
+    if (!sequence)
+        return false;
+
+    sequenceLength = static_cast<DWORD>(strlen(sequence));
+    return true;
+}
+
+struct SerialReadThreadContext
+{
+    HANDLE port = INVALID_HANDLE_VALUE;
+    HANDLE output = INVALID_HANDLE_VALUE;
+    volatile bool* stopRequested = nullptr;
+    DWORD lastError = ERROR_SUCCESS;
+};
+
+DWORD WINAPI serialReadThreadProc(LPVOID parameter)
+{
+    auto* context = static_cast<SerialReadThreadContext*>(parameter);
+    BYTE byte = 0;
+
+    while (!*context->stopRequested)
+    {
+        DWORD bytesRead = 0;
+        if (!ReadFile(context->port, &byte, 1, &bytesRead, nullptr))
+        {
+            context->lastError = GetLastError();
+            return 1;
+        }
+
+        if (bytesRead == 0)
+            continue;
+
+        if (!writeAll(context->output, &byte, 1))
+        {
+            context->lastError = GetLastError();
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int runSerialTerminal(const std::wstring& portName)
+{
+    restoreConsole();
+
+    auto cleanup = []() {
+        enableVT();
+        hideCursor();
+        FlushConsoleInputBuffer(hIn);
+    };
+
+    std::wstring devicePath = portName;
+    if (devicePath.rfind(L"\\\\.\\", 0) != 0)
+        devicePath = L"\\\\.\\" + devicePath;
+
+    HANDLE port = CreateFileW(devicePath.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (port == INVALID_HANDLE_VALUE)
+    {
+        wprintf(L"Failed to open %ls (error %lu)\n", portName.c_str(), GetLastError());
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    DCB dcb{};
+    dcb.DCBlength = sizeof(dcb);
+    if (!GetCommState(port, &dcb))
+    {
+        wprintf(L"Failed to read serial settings for %ls (error %lu)\n", portName.c_str(), GetLastError());
+        CloseHandle(port);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    wchar_t commSettings[] = L"baud=115200 parity=N data=8 stop=1 xon=off odsr=off octs=off dtr=on rts=on idsr=off";
+    if (!BuildCommDCBW(commSettings, &dcb))
+    {
+        wprintf(L"Failed to build serial settings for %ls (error %lu)\n", portName.c_str(), GetLastError());
+        CloseHandle(port);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    if (!SetCommState(port, &dcb))
+    {
+        wprintf(L"Failed to apply serial settings for %ls (error %lu)\n", portName.c_str(), GetLastError());
+        CloseHandle(port);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    COMMTIMEOUTS timeouts{};
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 50;
+    timeouts.WriteTotalTimeoutConstant = 500;
+    if (!SetCommTimeouts(port, &timeouts))
+    {
+        wprintf(L"Failed to set serial timeouts for %ls (error %lu)\n", portName.c_str(), GetLastError());
+        CloseHandle(port);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    if (!PurgeComm(port, PURGE_RXCLEAR | PURGE_TXCLEAR))
+    {
+        wprintf(L"Failed to clear serial buffers for %ls (error %lu)\n", portName.c_str(), GetLastError());
+        CloseHandle(port);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    const auto originalOutputCp = GetConsoleOutputCP();
+    const auto originalInputCp = GetConsoleCP();
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    SetConsoleMode(hOut, ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
+    SetConsoleMode(hIn, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT);
+    FlushConsoleInputBuffer(hIn);
+
+    wprintf(L"\x1b[0m\x1b[2J\x1b[H");
+    wprintf(L"\x1b[36mConnected to %ls @ 115200 8N1\x1b[0m\n", portName.c_str());
+    wprintf(L"\x1b[90mPress Ctrl+] to disconnect\x1b[0m\n\n");
+    _flushall();
+
+    volatile bool stopRequested = false;
+    SerialReadThreadContext threadContext{};
+    threadContext.port = port;
+    threadContext.output = GetStdHandle(STD_OUTPUT_HANDLE);
+    threadContext.stopRequested = &stopRequested;
+
+    HANDLE readThread = CreateThread(nullptr, 0, serialReadThreadProc, &threadContext, 0, nullptr);
+    if (!readThread)
+    {
+        wprintf(L"\nFailed to start serial reader thread (error %lu)\n", GetLastError());
+        CloseHandle(port);
+        SetConsoleOutputCP(originalOutputCp);
+        SetConsoleCP(originalInputCp);
+        waitForAnyKey(L"\nPress any key to return...");
+        cleanup();
+        return 1;
+    }
+
+    int exitCode = 0;
+    wchar_t pendingHigh = 0;
+
+    while (!stopRequested)
+    {
+        INPUT_RECORD rec{};
+        DWORD read = 0;
+        if (!ReadConsoleInputW(hIn, &rec, 1, &read) || read == 0)
+            continue;
+
+        if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown)
+            continue;
+
+        const auto& key = rec.Event.KeyEvent;
+        const auto ch = key.uChar.UnicodeChar;
+
+        if (ch == 0x1D)
+            break;
+
+        const char* sequence = nullptr;
+        DWORD sequenceLength = 0;
+        if (tryGetSerialVtSequence(key.wVirtualKeyCode, key.dwControlKeyState, sequence, sequenceLength))
+        {
+            if (!writeAll(port, sequence, sequenceLength))
+            {
+                wprintf(L"\nWrite to %ls failed (error %lu)\n", portName.c_str(), GetLastError());
+                exitCode = 1;
+                break;
+            }
+            continue;
+        }
+
+        if (ch == 0)
+            continue;
+
+        wchar_t chars[2] = {};
+        int charCount = 0;
+        if (isHighSurrogateChar(ch))
+        {
+            pendingHigh = ch;
+            continue;
+        }
+        if (pendingHigh != 0 && isLowSurrogateChar(ch))
+        {
+            chars[0] = pendingHigh;
+            chars[1] = ch;
+            charCount = 2;
+            pendingHigh = 0;
+        }
+        else
+        {
+            pendingHigh = 0;
+            chars[0] = ch;
+            charCount = 1;
+        }
+
+        char utf8[8] = {};
+        auto utf8Length = WideCharToMultiByte(CP_UTF8, 0, chars, charCount, utf8, sizeof(utf8), nullptr, nullptr);
+        if (utf8Length <= 0)
+        {
+            wprintf(L"\nFailed to encode keyboard input (error %lu)\n", GetLastError());
+            exitCode = 1;
+            break;
+        }
+
+        if (!writeAll(port, utf8, static_cast<DWORD>(utf8Length)))
+        {
+            wprintf(L"\nWrite to %ls failed (error %lu)\n", portName.c_str(), GetLastError());
+            exitCode = 1;
+            break;
+        }
+    }
+
+    stopRequested = true;
+    WaitForSingleObject(readThread, 1000);
+
+    if (threadContext.lastError != ERROR_SUCCESS && threadContext.lastError != ERROR_OPERATION_ABORTED)
+    {
+        wprintf(L"\nRead from %ls failed (error %lu)\n", portName.c_str(), threadContext.lastError);
+        exitCode = 1;
+        waitForAnyKey(L"\nPress any key to return...");
+    }
+
+    CloseHandle(readThread);
+    CloseHandle(port);
+
+    SetConsoleOutputCP(originalOutputCp);
+    SetConsoleCP(originalInputCp);
+    cleanup();
+    return exitCode;
+}
 
 int launchInDir(const std::wstring& commandLine, const std::wstring& workingDir)
 {
@@ -1134,6 +1522,7 @@ int wmain()
     tabData[(int)Tab::Sessions] = enumerateSessions();
     tabData[(int)Tab::Apps] = enumerateApps();
     tabData[(int)Tab::Containers] = enumerateContainers();
+    tabData[(int)Tab::Serial] = enumerateSerialPorts();
     // Tab::NewContainer uses input mode, no list
 
     bool running = true;
@@ -1310,6 +1699,13 @@ int wmain()
                     // Skip placeholder items
                     if (cmd == L"__DOCKER_NOT_AVAILABLE__" || cmd == L"__NO_CONTAINERS__")
                     {
+                        break;
+                    }
+                    if (currentTab == Tab::Serial)
+                    {
+                        runSerialTerminal(cmd);
+                        tabData[(int)Tab::Serial] = enumerateSerialPorts();
+                        needsRedraw = true;
                         break;
                     }
                     return launchAndWait(cmd);
