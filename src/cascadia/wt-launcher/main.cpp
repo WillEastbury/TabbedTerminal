@@ -1366,33 +1366,65 @@ int runSerialTerminal(const std::wstring& portName)
     return exitCode;
 }
 
-int launchInDir(const std::wstring& commandLine, const std::wstring& workingDir)
+// Magic exit code that tells Terminal to read the command file and re-launch
+static constexpr int EXIT_CODE_RELAUNCH = 42;
+
+std::wstring getLauncherCmdFilePath()
+{
+    // Check if wrapper script set the file path for us
+    wchar_t* envFile = nullptr;
+    size_t len = 0;
+    if (_wdupenv_s(&envFile, &len, L"WT_LAUNCHER_CMDFILE") == 0 && envFile && wcslen(envFile) > 0)
+    {
+        std::wstring path = envFile;
+        free(envFile);
+        return path;
+    }
+    if (envFile) free(envFile);
+
+    // Fallback: use PID-based filename
+    wchar_t* temp = nullptr;
+    _wdupenv_s(&temp, &len, L"TEMP");
+    std::wstring path = temp ? temp : L".";
+    free(temp);
+
+    path += L"\\wt-launcher-cmd-" + std::to_wstring(GetCurrentProcessId()) + L".txt";
+    return path;
+}
+
+int requestLaunch(const std::wstring& commandLine, const std::wstring& workingDir = L"")
 {
     restoreConsole();
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
+    auto cmdFile = getLauncherCmdFilePath();
 
-    std::wstring cmd = commandLine;
-    const wchar_t* cwd = workingDir.empty() ? nullptr : workingDir.c_str();
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, cwd, &si, &pi))
+    // Write command + optional working directory to the file
+    std::wofstream outFile(cmdFile);
+    if (!outFile.is_open())
     {
-        wprintf(L"Failed to launch: %ls (error %lu)\n", commandLine.c_str(), GetLastError());
+        wprintf(L"Failed to write command file: %ls\n", cmdFile.c_str());
         return 1;
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exitCode = 0;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return (int)exitCode;
+    outFile << commandLine << std::endl;
+    if (!workingDir.empty())
+    {
+        outFile << L"CWD=" << workingDir << std::endl;
+    }
+    outFile.close();
+
+    // Exit with magic code - Terminal will read the file and launch the command
+    return EXIT_CODE_RELAUNCH;
+}
+
+int launchInDir(const std::wstring& commandLine, const std::wstring& workingDir)
+{
+    return requestLaunch(commandLine, workingDir);
 }
 
 int launchAndWait(const std::wstring& commandLine)
 {
-    return launchInDir(commandLine, L"");
+    return requestLaunch(commandLine);
 }
 
 int createNewCopilotSession()
@@ -1647,25 +1679,24 @@ int wmain()
             }
             else if (currentTab == Tab::Sessions && !checkedItems.empty())
             {
-                // Multi-launch: spawn all checked sessions in separate windows
+                // Multi-launch: write all commands to the file, one per line
                 restoreConsole();
                 const auto& items = tabData[(int)Tab::Sessions];
-                for (int idx : checkedItems)
-                {
-                    if (idx >= (int)items.size()) continue;
-                    const auto& cmd = items[idx].command;
-                    if (cmd.find(L"__") == 0) continue; // skip placeholders
 
-                    // Launch each in a new Terminal window using wt.exe
-                    std::wstring wtCmd = L"wt.exe new-tab -- " + cmd;
-                    STARTUPINFOW si{};
-                    si.cb = sizeof(si);
-                    PROCESS_INFORMATION pi{};
-                    CreateProcessW(nullptr, wtCmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi);
-                    if (pi.hProcess) CloseHandle(pi.hProcess);
-                    if (pi.hThread) CloseHandle(pi.hThread);
+                auto cmdFile = getLauncherCmdFilePath();
+                std::wofstream outFile(cmdFile);
+                if (outFile.is_open())
+                {
+                    for (int idx : checkedItems)
+                    {
+                        if (idx >= (int)items.size()) continue;
+                        const auto& cmd = items[idx].command;
+                        if (cmd.find(L"__") == 0) continue;
+                        outFile << cmd << std::endl;
+                    }
+                    outFile.close();
                 }
-                return 0;
+                return EXIT_CODE_RELAUNCH;
             }
             else
             {

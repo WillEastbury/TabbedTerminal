@@ -385,7 +385,7 @@ namespace winrt::TerminalApp::implementation
 
                 // Launch the TUI launcher instead of the default profile
                 NewTerminalArgs args;
-                args.Commandline(winrt::hstring{ L"wt-launcher.exe" });
+                args.Commandline(winrt::hstring{ L"wt-launch.cmd" });
                 args.TabTitle(winrt::hstring{ L"New Tab" });
                 page->_OpenNewTerminalViaDropdown(args);
             }
