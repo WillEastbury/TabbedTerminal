@@ -117,6 +117,46 @@ void setReverse()
     wprintf(L"\x1b[7m");
 }
 
+// ─── Docker Helpers ─────────────────────────────────────────────────────────
+
+std::wstring findDockerExe()
+{
+    static const wchar_t* dockerPaths[] = {
+        L"C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+        L"C:\\Program Files\\Docker Desktop\\docker.exe",
+    };
+
+    for (const auto& p : dockerPaths)
+    {
+        if (fs::exists(p))
+            return p;
+    }
+
+    wchar_t* localAppData = nullptr;
+    size_t len = 0;
+    if (_wdupenv_s(&localAppData, &len, L"LOCALAPPDATA") == 0 && localAppData)
+    {
+        auto userPath = fs::path(localAppData) / L"Programs" / L"Docker" / L"Docker" / L"resources" / L"bin" / L"docker.exe";
+        free(localAppData);
+        if (fs::exists(userPath))
+            return userPath.wstring();
+    }
+
+    return L"docker";
+}
+
+bool isDockerAvailable()
+{
+    HANDLE pipe = CreateFileW(L"\\\\.\\pipe\\docker_engine",
+        GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (pipe != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(pipe);
+        return true;
+    }
+    return false;
+}
+
 // ─── Data Providers ─────────────────────────────────────────────────────────
 
 std::vector<ListItem> enumerateSessions()
@@ -164,6 +204,7 @@ std::vector<ListItem> enumerateSessions()
             std::wstring clientName;
             std::wstring sessionName;
             std::wstring repository;
+            int summaryCount = 0;
 
             while (std::getline(wsFile, line))
             {
@@ -188,17 +229,34 @@ std::vector<ListItem> enumerateSessions()
                     if (start != std::wstring::npos)
                         repository = val.substr(start);
                 }
+                else if (line.find(L"summary_count:") != std::wstring::npos)
+                {
+                    auto val = line.substr(line.find(L':') + 1);
+                    auto start = val.find_first_not_of(L" \t");
+                    if (start != std::wstring::npos)
+                    {
+                        try { summaryCount = std::stoi(val.substr(start)); } catch (...) {}
+                    }
+                }
             }
 
             // Only include CLI sessions
             if (clientName != L"github/cli")
                 continue;
 
-            // Skip sessions that look like scheduled/heartbeat background tasks
+            // Skip sessions with no name and no meaningful interaction
+            if (sessionName.empty() && summaryCount < 2)
+                continue;
+
+            // Skip sessions that look like scheduled/skill/heartbeat invocations
             if (sessionName.find(L"scheduled") != std::wstring::npos ||
                 sessionName.find(L"HEARTBEAT") != std::wstring::npos ||
                 sessionName.find(L"heartbeat") != std::wstring::npos ||
-                sessionName.size() > 200) // Very long names are prompt-based agents
+                sessionName.find(L"run the") == 0 ||
+                sessionName.find(L"Run the") == 0 ||
+                sessionName.find(L"run the update") != std::wstring::npos ||
+                sessionName.find(L"Trigger ") == 0 ||
+                sessionName.size() > 200)
                 continue;
 
             ListItem li{};
@@ -252,6 +310,14 @@ std::vector<ListItem> enumerateSessions()
             return a.mtime > b.mtime;
         });
 
+        // Add "New Session" option at the top
+        ListItem newSession{};
+        newSession.name = L"\u2795 New Copilot Session (create folder in C:\\source\\)";
+        newSession.detail = L"";
+        newSession.timestamp = L"";
+        newSession.command = L"__NEW_SESSION__";
+        items.push_back(std::move(newSession));
+
         for (auto& e : entries)
             items.push_back(std::move(e.item));
     }
@@ -276,6 +342,7 @@ std::vector<ListItem> enumerateApps()
         { L"PowerShell", L"pwsh.exe", L"PowerShell 7+" },
         { L"Windows PowerShell", L"powershell.exe", L"PowerShell 5.1" },
         { L"Command Prompt", L"cmd.exe", L"Classic CMD" },
+        { L"Serial Console", L"C:\\source\\serial-terminal\\bin\\Release\\net10.0\\win-x64\\native\\serial-terminal.exe", L"Serial Terminal" },
         { L"Git Bash", L"C:\\Program Files\\Git\\bin\\bash.exe", L"Git for Windows" },
         { L"WSL (Default)", L"wsl.exe", L"Windows Subsystem for Linux" },
         { L"GitHub Copilot CLI", L"gh copilot-cli", L"Copilot in the CLI" },
@@ -302,78 +369,98 @@ std::vector<ListItem> enumerateContainers()
 {
     std::vector<ListItem> items;
 
-    // Query Docker via named pipe
+    // Check Docker pipe availability first
     HANDLE pipe = CreateFileW(
         L"\\\\.\\pipe\\docker_engine",
         GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 
-    if (pipe != INVALID_HANDLE_VALUE)
+    if (pipe == INVALID_HANDLE_VALUE)
     {
-        std::string request = "GET /v1.41/containers/json?all=true HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        DWORD written = 0;
-        WriteFile(pipe, request.c_str(), (DWORD)request.size(), &written, nullptr);
+        // Docker not running - add a placeholder item
+        ListItem li{};
+        li.name = L"\u26A0 Docker is not running";
+        li.detail = L"Start Docker Desktop or install Docker";
+        li.timestamp = L"";
+        li.command = L"__DOCKER_NOT_AVAILABLE__";
+        items.push_back(std::move(li));
+        return items;
+    }
 
-        std::string response;
-        char buffer[8192];
-        DWORD bytesRead = 0;
-        while (ReadFile(pipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+    // Query Docker via named pipe
+    std::string request = "GET /v1.41/containers/json?all=true HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    DWORD written = 0;
+    WriteFile(pipe, request.c_str(), (DWORD)request.size(), &written, nullptr);
+
+    std::string response;
+    char buffer[8192];
+    DWORD bytesRead = 0;
+    while (ReadFile(pipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+    {
+        response.append(buffer, bytesRead);
+        if (response.find("\r\n\r\n") != std::string::npos)
         {
-            response.append(buffer, bytesRead);
-            if (response.find("\r\n\r\n") != std::string::npos)
+            auto bodyStart = response.find("\r\n\r\n") + 4;
+            auto body = response.substr(bodyStart);
+            int depth = 0;
+            bool complete = false;
+            for (auto c : body)
             {
-                // Simple: check if we have a complete JSON array
-                auto bodyStart = response.find("\r\n\r\n") + 4;
-                auto body = response.substr(bodyStart);
-                int depth = 0;
-                bool complete = false;
-                for (auto c : body)
-                {
-                    if (c == '[') depth++;
-                    else if (c == ']') { depth--; if (depth == 0) { complete = true; break; } }
-                }
-                if (complete) break;
+                if (c == '[') depth++;
+                else if (c == ']') { depth--; if (depth == 0) { complete = true; break; } }
             }
+            if (complete) break;
         }
-        CloseHandle(pipe);
+    }
+    CloseHandle(pipe);
 
-        // Parse container names and IDs (simple extraction)
-        size_t pos = 0;
-        while ((pos = response.find("\"Id\"", pos)) != std::string::npos)
+    // Parse container names and IDs
+    auto dockerExe = findDockerExe();
+    size_t pos = 0;
+    while ((pos = response.find("\"Id\"", pos)) != std::string::npos)
+    {
+        ListItem li{};
+
+        auto idStart = response.find('\"', pos + 4) + 1;
+        auto idEnd = response.find('\"', idStart);
+        std::string id = response.substr(idStart, std::min((size_t)12, idEnd - idStart));
+
+        auto namesPos = response.find("\"Names\"", pos);
+        std::string name = id;
+        if (namesPos != std::string::npos && namesPos < response.find("\"Id\"", pos + 4))
         {
-            ListItem li{};
-
-            auto idStart = response.find('\"', pos + 4) + 1;
-            auto idEnd = response.find('\"', idStart);
-            std::string id = response.substr(idStart, std::min((size_t)12, idEnd - idStart));
-
-            auto namesPos = response.find("\"Names\"", pos);
-            std::string name = id;
-            if (namesPos != std::string::npos && namesPos < response.find("\"Id\"", pos + 4))
-            {
-                auto ns = response.find("\"", response.find("[", namesPos) + 1) + 1;
-                auto ne = response.find("\"", ns);
-                name = response.substr(ns, ne - ns);
-                if (!name.empty() && name[0] == '/') name = name.substr(1);
-            }
-
-            auto statePos = response.find("\"State\"", pos);
-            std::string state;
-            if (statePos != std::string::npos)
-            {
-                auto ss = response.find('\"', statePos + 7) + 1;
-                auto se = response.find('\"', ss);
-                state = response.substr(ss, se - ss);
-            }
-
-            li.name = std::wstring(name.begin(), name.end());
-            li.detail = std::wstring(state.begin(), state.end());
-            li.timestamp = L"Docker";
-            std::wstring wid(id.begin(), id.end());
-            li.command = L"docker exec -it " + wid + L" /bin/sh";
-
-            items.push_back(std::move(li));
-            pos = idEnd != std::string::npos ? idEnd : pos + 4;
+            auto ns = response.find("\"", response.find("[", namesPos) + 1) + 1;
+            auto ne = response.find("\"", ns);
+            name = response.substr(ns, ne - ns);
+            if (!name.empty() && name[0] == '/') name = name.substr(1);
         }
+
+        auto statePos = response.find("\"State\"", pos);
+        std::string state;
+        if (statePos != std::string::npos)
+        {
+            auto ss = response.find('\"', statePos + 7) + 1;
+            auto se = response.find('\"', ss);
+            state = response.substr(ss, se - ss);
+        }
+
+        li.name = std::wstring(name.begin(), name.end());
+        li.detail = std::wstring(state.begin(), state.end());
+        li.timestamp = L"Docker";
+        std::wstring wid(id.begin(), id.end());
+        li.command = L"\"" + dockerExe + L"\" exec -it " + wid + L" /bin/sh";
+
+        items.push_back(std::move(li));
+        pos = idEnd != std::string::npos ? idEnd : pos + 4;
+    }
+
+    if (items.empty())
+    {
+        ListItem li{};
+        li.name = L"No containers found";
+        li.detail = L"Use tab 4 to create one";
+        li.timestamp = L"";
+        li.command = L"__NO_CONTAINERS__";
+        items.push_back(std::move(li));
     }
 
     return items;
@@ -469,6 +556,27 @@ void renderNewContainerInput(const std::wstring& imageName, bool focused)
 {
     moveTo(3, 1);
     wprintf(L"\x1b[2K");
+
+    if (!isDockerAvailable())
+    {
+        wprintf(L"  \x1b[33m\u26A0 Docker is not running\x1b[0m\n\n");
+        moveTo(5, 1);
+        wprintf(L"\x1b[2K");
+        wprintf(L"  To use containers, install and start Docker Desktop:\n");
+        moveTo(6, 1);
+        wprintf(L"\x1b[2K");
+        setDim();
+        wprintf(L"    https://docker.com/get-started\n");
+        moveTo(8, 1);
+        wprintf(L"\x1b[2K");
+        wprintf(L"  Or install via winget:\n");
+        moveTo(9, 1);
+        wprintf(L"\x1b[2K");
+        wprintf(L"    winget install Docker.DockerDesktop");
+        resetColor();
+        return;
+    }
+
     setBold();
     wprintf(L"  Create and connect to a new Docker container\n");
     resetColor();
@@ -553,7 +661,7 @@ KeyEvent readKey()
 
 // ─── Process Launch ─────────────────────────────────────────────────────────
 
-int launchAndWait(const std::wstring& commandLine)
+int launchInDir(const std::wstring& commandLine, const std::wstring& workingDir)
 {
     restoreConsole();
 
@@ -562,7 +670,8 @@ int launchAndWait(const std::wstring& commandLine)
     PROCESS_INFORMATION pi{};
 
     std::wstring cmd = commandLine;
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
+    const wchar_t* cwd = workingDir.empty() ? nullptr : workingDir.c_str();
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, cwd, &si, &pi))
     {
         wprintf(L"Failed to launch: %ls (error %lu)\n", commandLine.c_str(), GetLastError());
         return 1;
@@ -576,14 +685,82 @@ int launchAndWait(const std::wstring& commandLine)
     return (int)exitCode;
 }
 
+int launchAndWait(const std::wstring& commandLine)
+{
+    return launchInDir(commandLine, L"");
+}
+
+int createNewCopilotSession()
+{
+    restoreConsole();
+    wprintf(L"\x1b[?25h"); // show cursor
+
+    wprintf(L"\n  Create a new Copilot CLI session\n");
+    wprintf(L"  Folder name (will be created in C:\\source\\): ");
+    _flushall();
+
+    // Read folder name from console
+    wchar_t folderBuf[256] = {};
+    DWORD charsRead = 0;
+
+    // Restore normal console input mode for line reading
+    SetConsoleMode(hIn, ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+    ReadConsoleW(hIn, folderBuf, 255, &charsRead, nullptr);
+
+    // Trim trailing newline
+    std::wstring folderName(folderBuf, charsRead);
+    while (!folderName.empty() && (folderName.back() == L'\n' || folderName.back() == L'\r' || folderName.back() == L' '))
+        folderName.pop_back();
+
+    if (folderName.empty())
+    {
+        wprintf(L"  Cancelled.\n");
+        return 1;
+    }
+
+    // Create the folder
+    fs::path targetDir = fs::path(L"C:\\source") / folderName;
+    try
+    {
+        fs::create_directories(targetDir);
+    }
+    catch (...)
+    {
+        wprintf(L"  Failed to create folder: %ls\n", targetDir.c_str());
+        return 1;
+    }
+
+    wprintf(L"  Created: %ls\n", targetDir.c_str());
+    wprintf(L"  Launching Copilot CLI...\n");
+    _flushall();
+
+    // Launch copilot in the new folder
+    return launchInDir(L"cmd.exe /k gh copilot-cli", targetDir.wstring());
+}
+
 int createContainerAndConnect(const std::wstring& image)
 {
     restoreConsole();
+
+    if (!isDockerAvailable())
+    {
+        wprintf(L"\n  \x1b[31mDocker is not running.\x1b[0m\n\n");
+        wprintf(L"  Please start Docker Desktop and try again.\n");
+        wprintf(L"  If Docker is not installed, get it from: https://docker.com/get-started\n\n");
+        wprintf(L"  Press any key to exit...\n");
+        _flushall();
+        SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
+        INPUT_RECORD rec;
+        DWORD read;
+        ReadConsoleInputW(hIn, &rec, 1, &read);
+        return 1;
+    }
+
     wprintf(L"Creating container from image: %ls...\n", image.c_str());
     _flushall();
 
-    // Use cmd /c to run docker so PATH resolution works correctly
-    std::wstring runCmd = L"cmd.exe /c docker run -dit " + image;
+    auto dockerExe = findDockerExe();
+    std::wstring runCmd = L"\"" + dockerExe + L"\" run -dit " + image;
     STARTUPINFOW si{};
     si.cb = sizeof(si);
 
@@ -654,7 +831,8 @@ int createContainerAndConnect(const std::wstring& image)
 
     // Now exec into it
     std::string shortId = containerId.substr(0, 12);
-    std::wstring execCmd = L"docker exec -it " + std::wstring(shortId.begin(), shortId.end()) + L" /bin/sh";
+    std::wstring wShortId(shortId.begin(), shortId.end());
+    std::wstring execCmd = L"\"" + dockerExe + L"\" exec -it " + wShortId + L" /bin/sh";
     wprintf(L"Connecting to %hs...\n", shortId.c_str());
     _flushall();
     return launchAndWait(execCmd);
@@ -774,7 +952,7 @@ int wmain()
         case KeyEvent::Enter:
             if (currentTab == Tab::NewContainer)
             {
-                if (!newContainerImage.empty())
+                if (!newContainerImage.empty() && isDockerAvailable())
                 {
                     return createContainerAndConnect(newContainerImage);
                 }
@@ -784,7 +962,17 @@ int wmain()
                 const auto& items = tabData[(int)currentTab];
                 if (!items.empty() && selectedIndex < (int)items.size())
                 {
-                    return launchAndWait(items[selectedIndex].command);
+                    const auto& cmd = items[selectedIndex].command;
+                    if (cmd == L"__NEW_SESSION__")
+                    {
+                        return createNewCopilotSession();
+                    }
+                    // Skip placeholder items
+                    if (cmd == L"__DOCKER_NOT_AVAILABLE__" || cmd == L"__NO_CONTAINERS__")
+                    {
+                        break;
+                    }
+                    return launchAndWait(cmd);
                 }
             }
             break;
