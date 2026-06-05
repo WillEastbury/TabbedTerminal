@@ -119,6 +119,19 @@ void setReverse()
 
 // ─── Docker Helpers ─────────────────────────────────────────────────────────
 
+enum class DockerBackend
+{
+    None,
+    Desktop,  // Docker Desktop (Windows pipe)
+    WSL       // Docker Engine inside WSL
+};
+
+struct DockerEngine
+{
+    DockerBackend backend = DockerBackend::None;
+    std::wstring label;
+};
+
 std::wstring findDockerExe()
 {
     static const wchar_t* dockerPaths[] = {
@@ -145,7 +158,7 @@ std::wstring findDockerExe()
     return L"docker";
 }
 
-bool isDockerAvailable()
+bool isDockerDesktopAvailable()
 {
     HANDLE pipe = CreateFileW(L"\\\\.\\pipe\\docker_engine",
         GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -156,6 +169,123 @@ bool isDockerAvailable()
     }
     return false;
 }
+
+bool isDockerWSLAvailable()
+{
+    // Check if docker is available inside WSL by running a quick command
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+        return false;
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    std::wstring cmd = L"wsl.exe -d Ubuntu -- docker info --format {{.ServerVersion}}";
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return false;
+    }
+    CloseHandle(hWritePipe);
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(hReadPipe);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return exitCode == 0;
+}
+
+bool isDockerAvailable()
+{
+    return isDockerDesktopAvailable() || isDockerWSLAvailable();
+}
+
+std::vector<DockerEngine> getAvailableEngines()
+{
+    std::vector<DockerEngine> engines;
+    if (isDockerDesktopAvailable())
+        engines.push_back({ DockerBackend::Desktop, L"Docker Desktop" });
+    if (isDockerWSLAvailable())
+        engines.push_back({ DockerBackend::WSL, L"Docker (WSL)" });
+    return engines;
+}
+
+// Build a command prefix for the given backend
+std::wstring dockerCmd(DockerBackend backend, const std::wstring& args)
+{
+    if (backend == DockerBackend::WSL)
+    {
+        return L"wsl.exe -d Ubuntu -- docker " + args;
+    }
+    else
+    {
+        auto exe = findDockerExe();
+        return L"\"" + exe + L"\" " + args;
+    }
+}
+
+// Run a docker command and capture output
+std::string runDockerCapture(DockerBackend backend, const std::wstring& args)
+{
+    std::wstring cmd = dockerCmd(backend, args);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+        return {};
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return {};
+    }
+    CloseHandle(hWritePipe);
+
+    std::string output;
+    char buffer[4096];
+    DWORD bytesRead = 0;
+    while (ReadFile(hReadPipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+    {
+        output.append(buffer, bytesRead);
+    }
+    CloseHandle(hReadPipe);
+
+    WaitForSingleObject(pi.hProcess, 30000);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return output;
+}
+
+// Global: which backend is active (selected by user if both available)
+static DockerBackend g_activeBackend = DockerBackend::None;
 
 // ─── Data Providers ─────────────────────────────────────────────────────────
 
@@ -369,88 +499,163 @@ std::vector<ListItem> enumerateContainers()
 {
     std::vector<ListItem> items;
 
-    // Check Docker pipe availability first
-    HANDLE pipe = CreateFileW(
-        L"\\\\.\\pipe\\docker_engine",
-        GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    auto engines = getAvailableEngines();
 
-    if (pipe == INVALID_HANDLE_VALUE)
+    if (engines.empty())
     {
-        // Docker not running - add a placeholder item
         ListItem li{};
-        li.name = L"\u26A0 Docker is not running";
-        li.detail = L"Start Docker Desktop or install Docker";
+        li.name = L"\u26A0 Docker is not available";
+        li.detail = L"Install Docker Desktop or docker.io in WSL";
         li.timestamp = L"";
         li.command = L"__DOCKER_NOT_AVAILABLE__";
         items.push_back(std::move(li));
         return items;
     }
 
-    // Query Docker via named pipe
-    std::string request = "GET /v1.41/containers/json?all=true HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    DWORD written = 0;
-    WriteFile(pipe, request.c_str(), (DWORD)request.size(), &written, nullptr);
-
-    std::string response;
-    char buffer[8192];
-    DWORD bytesRead = 0;
-    while (ReadFile(pipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+    // If multiple engines, let user pick (shown as items at top)
+    if (engines.size() > 1 && g_activeBackend == DockerBackend::None)
     {
-        response.append(buffer, bytesRead);
-        if (response.find("\r\n\r\n") != std::string::npos)
+        for (const auto& eng : engines)
         {
-            auto bodyStart = response.find("\r\n\r\n") + 4;
-            auto body = response.substr(bodyStart);
-            int depth = 0;
-            bool complete = false;
-            for (auto c : body)
+            ListItem li{};
+            li.name = L"\u25B6 Use: " + eng.label;
+            li.detail = L"Select engine";
+            li.timestamp = L"";
+            li.command = (eng.backend == DockerBackend::Desktop) ? L"__SELECT_DOCKER_DESKTOP__" : L"__SELECT_DOCKER_WSL__";
+            items.push_back(std::move(li));
+        }
+        return items;
+    }
+
+    // Use first available if only one, or the selected one
+    DockerBackend backend = g_activeBackend;
+    if (backend == DockerBackend::None)
+        backend = engines[0].backend;
+    g_activeBackend = backend;
+
+    // Query containers via the selected backend
+    std::string output;
+    if (backend == DockerBackend::Desktop)
+    {
+        // Use named pipe for speed
+        HANDLE pipe = CreateFileW(L"\\\\.\\pipe\\docker_engine",
+            GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE)
+        {
+            std::string request = "GET /v1.41/containers/json?all=true HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            DWORD written = 0;
+            WriteFile(pipe, request.c_str(), (DWORD)request.size(), &written, nullptr);
+
+            char buffer[8192];
+            DWORD bytesRead = 0;
+            while (ReadFile(pipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
             {
-                if (c == '[') depth++;
-                else if (c == ']') { depth--; if (depth == 0) { complete = true; break; } }
+                output.append(buffer, bytesRead);
+                if (output.find("\r\n\r\n") != std::string::npos)
+                {
+                    auto bodyStart = output.find("\r\n\r\n") + 4;
+                    auto body = output.substr(bodyStart);
+                    int depth = 0;
+                    bool complete = false;
+                    for (auto c : body)
+                    {
+                        if (c == '[') depth++;
+                        else if (c == ']') { depth--; if (depth == 0) { complete = true; break; } }
+                    }
+                    if (complete) break;
+                }
             }
-            if (complete) break;
+            CloseHandle(pipe);
+            // Extract body
+            auto bodyStart = output.find("\r\n\r\n");
+            if (bodyStart != std::string::npos)
+                output = output.substr(bodyStart + 4);
         }
     }
-    CloseHandle(pipe);
+    else
+    {
+        // WSL: use docker ps with JSON format
+        output = runDockerCapture(DockerBackend::WSL, L"ps -a --format \"{{.ID}}\\t{{.Names}}\\t{{.Image}}\\t{{.State}}\"");
+    }
 
-    // Parse container names and IDs
-    auto dockerExe = findDockerExe();
-    size_t pos = 0;
-    while ((pos = response.find("\"Id\"", pos)) != std::string::npos)
+    if (output.empty())
     {
         ListItem li{};
-
-        auto idStart = response.find('\"', pos + 4) + 1;
-        auto idEnd = response.find('\"', idStart);
-        std::string id = response.substr(idStart, std::min((size_t)12, idEnd - idStart));
-
-        auto namesPos = response.find("\"Names\"", pos);
-        std::string name = id;
-        if (namesPos != std::string::npos && namesPos < response.find("\"Id\"", pos + 4))
-        {
-            auto ns = response.find("\"", response.find("[", namesPos) + 1) + 1;
-            auto ne = response.find("\"", ns);
-            name = response.substr(ns, ne - ns);
-            if (!name.empty() && name[0] == '/') name = name.substr(1);
-        }
-
-        auto statePos = response.find("\"State\"", pos);
-        std::string state;
-        if (statePos != std::string::npos)
-        {
-            auto ss = response.find('\"', statePos + 7) + 1;
-            auto se = response.find('\"', ss);
-            state = response.substr(ss, se - ss);
-        }
-
-        li.name = std::wstring(name.begin(), name.end());
-        li.detail = std::wstring(state.begin(), state.end());
-        li.timestamp = L"Docker";
-        std::wstring wid(id.begin(), id.end());
-        li.command = L"\"" + dockerExe + L"\" exec -it " + wid + L" /bin/sh";
-
+        li.name = L"No containers found";
+        li.detail = L"Use tab 4 to create one";
+        li.timestamp = L"";
+        li.command = L"__NO_CONTAINERS__";
         items.push_back(std::move(li));
-        pos = idEnd != std::string::npos ? idEnd : pos + 4;
+        return items;
+    }
+
+    if (backend == DockerBackend::WSL)
+    {
+        // Parse tab-separated output: ID\tName\tImage\tState
+        std::istringstream stream(output);
+        std::string line;
+        while (std::getline(stream, line))
+        {
+            if (line.empty()) continue;
+            // Split by tab
+            std::vector<std::string> fields;
+            std::string field;
+            std::istringstream ls(line);
+            while (std::getline(ls, field, '\t'))
+                fields.push_back(field);
+
+            if (fields.size() >= 4)
+            {
+                ListItem li{};
+                li.name = std::wstring(fields[1].begin(), fields[1].end());
+                li.detail = std::wstring(fields[3].begin(), fields[3].end());
+                li.timestamp = L"WSL Docker";
+                std::wstring wid(fields[0].begin(), fields[0].end());
+                li.command = L"wsl.exe -d Ubuntu -- docker exec -it " + wid + L" /bin/sh";
+                items.push_back(std::move(li));
+            }
+        }
+    }
+    else
+    {
+        // Parse JSON from Docker Desktop pipe
+        size_t pos = 0;
+        while ((pos = output.find("\"Id\"", pos)) != std::string::npos)
+        {
+            ListItem li{};
+
+            auto idStart = output.find('\"', pos + 4) + 1;
+            auto idEnd = output.find('\"', idStart);
+            std::string id = output.substr(idStart, std::min((size_t)12, idEnd - idStart));
+
+            auto namesPos = output.find("\"Names\"", pos);
+            std::string name = id;
+            if (namesPos != std::string::npos && namesPos < output.find("\"Id\"", pos + 4))
+            {
+                auto ns = output.find("\"", output.find("[", namesPos) + 1) + 1;
+                auto ne = output.find("\"", ns);
+                name = output.substr(ns, ne - ns);
+                if (!name.empty() && name[0] == '/') name = name.substr(1);
+            }
+
+            auto statePos = output.find("\"State\"", pos);
+            std::string state;
+            if (statePos != std::string::npos)
+            {
+                auto ss = output.find('\"', statePos + 7) + 1;
+                auto se = output.find('\"', ss);
+                state = output.substr(ss, se - ss);
+            }
+
+            li.name = std::wstring(name.begin(), name.end());
+            li.detail = std::wstring(state.begin(), state.end());
+            li.timestamp = L"Docker Desktop";
+            std::wstring wid(id.begin(), id.end());
+            li.command = dockerCmd(DockerBackend::Desktop, L"exec -it " + wid + L" /bin/sh");
+
+            items.push_back(std::move(li));
+            pos = idEnd != std::string::npos ? idEnd : pos + 4;
+        }
     }
 
     if (items.empty())
@@ -559,20 +764,25 @@ void renderNewContainerInput(const std::wstring& imageName, bool focused)
 
     if (!isDockerAvailable())
     {
-        wprintf(L"  \x1b[33m\u26A0 Docker is not running\x1b[0m\n\n");
+        wprintf(L"  \x1b[33m\u26A0 Docker is not available\x1b[0m\n\n");
         moveTo(5, 1);
         wprintf(L"\x1b[2K");
-        wprintf(L"  To use containers, install and start Docker Desktop:\n");
+        wprintf(L"  Option 1: Install Docker Desktop\n");
         moveTo(6, 1);
         wprintf(L"\x1b[2K");
         setDim();
-        wprintf(L"    https://docker.com/get-started\n");
+        wprintf(L"    winget install Docker.DockerDesktop\n");
+        resetColor();
         moveTo(8, 1);
         wprintf(L"\x1b[2K");
-        wprintf(L"  Or install via winget:\n");
+        wprintf(L"  Option 2: Install Docker Engine in WSL\n");
         moveTo(9, 1);
         wprintf(L"\x1b[2K");
-        wprintf(L"    winget install Docker.DockerDesktop");
+        setDim();
+        wprintf(L"    wsl -d Ubuntu -- sudo apt-get install -y docker.io\n");
+        moveTo(10, 1);
+        wprintf(L"\x1b[2K");
+        wprintf(L"    wsl -d Ubuntu -- sudo service docker start");
         resetColor();
         return;
     }
@@ -744,9 +954,9 @@ int createContainerAndConnect(const std::wstring& image)
 
     if (!isDockerAvailable())
     {
-        wprintf(L"\n  \x1b[31mDocker is not running.\x1b[0m\n\n");
-        wprintf(L"  Please start Docker Desktop and try again.\n");
-        wprintf(L"  If Docker is not installed, get it from: https://docker.com/get-started\n\n");
+        wprintf(L"\n  \x1b[31mDocker is not available.\x1b[0m\n\n");
+        wprintf(L"  Install Docker Desktop:  winget install Docker.DockerDesktop\n");
+        wprintf(L"  Or in WSL:  wsl -d Ubuntu -- sudo apt-get install -y docker.io\n\n");
         wprintf(L"  Press any key to exit...\n");
         _flushall();
         SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
@@ -756,83 +966,40 @@ int createContainerAndConnect(const std::wstring& image)
         return 1;
     }
 
-    wprintf(L"Creating container from image: %ls...\n", image.c_str());
+    // Pick backend if not yet selected
+    if (g_activeBackend == DockerBackend::None)
+    {
+        auto engines = getAvailableEngines();
+        g_activeBackend = engines[0].backend;
+    }
+
+    wprintf(L"Creating container from image: %ls (%ls)...\n", image.c_str(),
+        g_activeBackend == DockerBackend::WSL ? L"WSL" : L"Docker Desktop");
     _flushall();
 
-    auto dockerExe = findDockerExe();
-    std::wstring runCmd = L"\"" + dockerExe + L"\" run -dit " + image;
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
+    // Run: docker run -dit <image>
+    auto output = runDockerCapture(g_activeBackend, L"run -dit " + image);
 
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
+    // Trim whitespace from container ID
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r' || output.back() == ' '))
+        output.pop_back();
 
-    HANDLE hReadPipe, hWritePipe;
-    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+    if (output.empty() || output.find("Error") != std::string::npos || output.find("error") != std::string::npos)
     {
-        wprintf(L"Failed to create pipe.\n");
-        return 1;
-    }
-    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
-
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = hWritePipe;
-    si.hStdError = hWritePipe;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-
-    PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(nullptr, runCmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-    {
-        CloseHandle(hReadPipe);
-        CloseHandle(hWritePipe);
-        wprintf(L"Failed to create container (error %lu).\n", GetLastError());
-        wprintf(L"Make sure Docker Desktop is running.\n");
+        wprintf(L"Failed to create container:\n");
+        wprintf(L"%hs\n", output.c_str());
+        wprintf(L"\nPress any key to exit...\n");
+        _flushall();
+        SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
+        INPUT_RECORD rec;
+        DWORD read;
+        ReadConsoleInputW(hIn, &rec, 1, &read);
         return 1;
     }
 
-    CloseHandle(hWritePipe);
-
-    // Read container ID from output BEFORE waiting (avoid pipe deadlock)
-    char buf[256] = {};
-    DWORD bytesRead = 0;
-    DWORD totalRead = 0;
-    while (ReadFile(hReadPipe, buf + totalRead, (DWORD)(sizeof(buf) - 1 - totalRead), &bytesRead, nullptr) && bytesRead > 0)
-    {
-        totalRead += bytesRead;
-        if (totalRead >= sizeof(buf) - 1)
-            break;
-    }
-    CloseHandle(hReadPipe);
-
-    WaitForSingleObject(pi.hProcess, 60000);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    if (exitCode != 0)
-    {
-        wprintf(L"Docker returned error (exit code %lu):\n", exitCode);
-        wprintf(L"%hs\n", buf);
-        return 1;
-    }
-
-    std::string containerId(buf, totalRead);
-    // Trim whitespace
-    while (!containerId.empty() && (containerId.back() == '\n' || containerId.back() == '\r' || containerId.back() == ' '))
-        containerId.pop_back();
-
-    if (containerId.empty())
-    {
-        wprintf(L"Failed to get container ID from docker output.\n");
-        return 1;
-    }
-
-    // Now exec into it
-    std::string shortId = containerId.substr(0, 12);
+    std::string shortId = output.substr(0, 12);
     std::wstring wShortId(shortId.begin(), shortId.end());
-    std::wstring execCmd = L"\"" + dockerExe + L"\" exec -it " + wShortId + L" /bin/sh";
+    std::wstring execCmd = dockerCmd(g_activeBackend, L"exec -it " + wShortId + L" /bin/sh");
     wprintf(L"Connecting to %hs...\n", shortId.c_str());
     _flushall();
     return launchAndWait(execCmd);
@@ -966,6 +1133,25 @@ int wmain()
                     if (cmd == L"__NEW_SESSION__")
                     {
                         return createNewCopilotSession();
+                    }
+                    // Engine selection - set backend and refresh container list
+                    if (cmd == L"__SELECT_DOCKER_DESKTOP__")
+                    {
+                        g_activeBackend = DockerBackend::Desktop;
+                        tabData[(int)Tab::Containers] = enumerateContainers();
+                        selectedIndex = 0;
+                        scrollOffset = 0;
+                        needsRedraw = true;
+                        break;
+                    }
+                    if (cmd == L"__SELECT_DOCKER_WSL__")
+                    {
+                        g_activeBackend = DockerBackend::WSL;
+                        tabData[(int)Tab::Containers] = enumerateContainers();
+                        selectedIndex = 0;
+                        scrollOffset = 0;
+                        needsRedraw = true;
+                        break;
                     }
                     // Skip placeholder items
                     if (cmd == L"__DOCKER_NOT_AVAILABLE__" || cmd == L"__NO_CONTAINERS__")
