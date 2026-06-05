@@ -57,7 +57,9 @@ void enableVT()
     GetConsoleMode(hOut, &origOutMode);
     GetConsoleMode(hIn, &origInMode);
     SetConsoleMode(hOut, origOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
-    SetConsoleMode(hIn, ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
+    // Use raw console input mode: no line input, no echo, enable window events
+    // Do NOT use ENABLE_VIRTUAL_TERMINAL_INPUT — we want KEY_EVENT records with VK codes
+    SetConsoleMode(hIn, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_PROCESSED_INPUT);
 
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(hOut, &csbi))
@@ -145,27 +147,92 @@ std::vector<ListItem> enumerateSessions()
             if (!entry.is_directory())
                 continue;
 
-            ListItem li{};
             auto id = entry.path().filename().wstring();
-            li.command = L"gh copilot-cli --resume " + id;
 
-            // Try plan.md for summary
-            auto planFile = entry.path() / L"plan.md";
-            if (fs::exists(planFile))
+            // Must have workspace.yaml
+            auto workspaceFile = entry.path() / L"workspace.yaml";
+            if (!fs::exists(workspaceFile))
+                continue;
+
+            // Read workspace.yaml to check client_name and get session name
+            std::wifstream wsFile(workspaceFile);
+            if (!wsFile.is_open())
+                continue;
+
+            std::wstring wsContent;
+            std::wstring line;
+            std::wstring clientName;
+            std::wstring sessionName;
+            std::wstring repository;
+
+            while (std::getline(wsFile, line))
             {
-                std::wifstream pf(planFile);
-                std::wstring firstLine;
-                if (std::getline(pf, firstLine))
+                if (line.find(L"client_name:") != std::wstring::npos)
                 {
-                    auto start = firstLine.find_first_not_of(L"# ");
+                    auto val = line.substr(line.find(L':') + 1);
+                    auto start = val.find_first_not_of(L" \t");
                     if (start != std::wstring::npos)
-                        li.name = firstLine.substr(start);
+                        clientName = val.substr(start);
+                }
+                else if (line.find(L"name:") == 0 || line.find(L"name: ") == 0)
+                {
+                    auto val = line.substr(line.find(L':') + 1);
+                    auto start = val.find_first_not_of(L" \t");
+                    if (start != std::wstring::npos)
+                        sessionName = val.substr(start);
+                }
+                else if (line.find(L"repository:") != std::wstring::npos)
+                {
+                    auto val = line.substr(line.find(L':') + 1);
+                    auto start = val.find_first_not_of(L" \t");
+                    if (start != std::wstring::npos)
+                        repository = val.substr(start);
                 }
             }
+
+            // Only include CLI sessions
+            if (clientName != L"github/cli")
+                continue;
+
+            // Skip sessions that look like scheduled/heartbeat background tasks
+            if (sessionName.find(L"scheduled") != std::wstring::npos ||
+                sessionName.find(L"HEARTBEAT") != std::wstring::npos ||
+                sessionName.find(L"heartbeat") != std::wstring::npos ||
+                sessionName.size() > 200) // Very long names are prompt-based agents
+                continue;
+
+            ListItem li{};
+            li.command = L"gh copilot-cli --resume " + id;
+
+            // Use session name from workspace.yaml first, then plan.md
+            if (!sessionName.empty() && sessionName != L"|-")
+            {
+                li.name = sessionName;
+            }
+            else
+            {
+                auto planFile = entry.path() / L"plan.md";
+                if (fs::exists(planFile))
+                {
+                    std::wifstream pf(planFile);
+                    std::wstring firstLine;
+                    if (std::getline(pf, firstLine))
+                    {
+                        auto start = firstLine.find_first_not_of(L"# ");
+                        if (start != std::wstring::npos)
+                            li.name = firstLine.substr(start);
+                    }
+                }
+            }
+
             if (li.name.empty())
                 li.name = L"Session " + id.substr(0, 8) + L"...";
 
-            li.detail = L"Copilot CLI";
+            // Truncate long names for display
+            if (li.name.size() > 50)
+                li.name = li.name.substr(0, 47) + L"...";
+
+            li.detail = repository.empty() ? L"Copilot CLI" : repository;
 
             // Get timestamp
             auto mtime = fs::last_write_time(entry.path());
@@ -513,9 +580,10 @@ int createContainerAndConnect(const std::wstring& image)
 {
     restoreConsole();
     wprintf(L"Creating container from image: %ls...\n", image.c_str());
+    _flushall();
 
-    // docker run -dit <image>
-    std::wstring runCmd = L"docker run -dit " + image;
+    // Use cmd /c to run docker so PATH resolution works correctly
+    std::wstring runCmd = L"cmd.exe /c docker run -dit " + image;
     STARTUPINFOW si{};
     si.cb = sizeof(si);
 
@@ -524,7 +592,11 @@ int createContainerAndConnect(const std::wstring& image)
     sa.bInheritHandle = TRUE;
 
     HANDLE hReadPipe, hWritePipe;
-    CreatePipe(&hReadPipe, &hWritePipe, &sa, 0);
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+    {
+        wprintf(L"Failed to create pipe.\n");
+        return 1;
+    }
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
     si.dwFlags = STARTF_USESTDHANDLES;
@@ -533,33 +605,50 @@ int createContainerAndConnect(const std::wstring& image)
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(nullptr, runCmd.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
+    if (!CreateProcessW(nullptr, runCmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
     {
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
-        wprintf(L"Failed to create container.\n");
+        wprintf(L"Failed to create container (error %lu).\n", GetLastError());
+        wprintf(L"Make sure Docker Desktop is running.\n");
         return 1;
     }
 
     CloseHandle(hWritePipe);
-    WaitForSingleObject(pi.hProcess, 30000);
 
-    // Read container ID from output
-    char buf[128] = {};
+    // Read container ID from output BEFORE waiting (avoid pipe deadlock)
+    char buf[256] = {};
     DWORD bytesRead = 0;
-    ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, nullptr);
+    DWORD totalRead = 0;
+    while (ReadFile(hReadPipe, buf + totalRead, (DWORD)(sizeof(buf) - 1 - totalRead), &bytesRead, nullptr) && bytesRead > 0)
+    {
+        totalRead += bytesRead;
+        if (totalRead >= sizeof(buf) - 1)
+            break;
+    }
     CloseHandle(hReadPipe);
+
+    WaitForSingleObject(pi.hProcess, 60000);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    std::string containerId(buf, bytesRead);
+    if (exitCode != 0)
+    {
+        wprintf(L"Docker returned error (exit code %lu):\n", exitCode);
+        wprintf(L"%hs\n", buf);
+        return 1;
+    }
+
+    std::string containerId(buf, totalRead);
     // Trim whitespace
-    while (!containerId.empty() && (containerId.back() == '\n' || containerId.back() == '\r'))
+    while (!containerId.empty() && (containerId.back() == '\n' || containerId.back() == '\r' || containerId.back() == ' '))
         containerId.pop_back();
 
     if (containerId.empty())
     {
-        wprintf(L"Failed to get container ID.\n");
+        wprintf(L"Failed to get container ID from docker output.\n");
         return 1;
     }
 
@@ -567,6 +656,7 @@ int createContainerAndConnect(const std::wstring& image)
     std::string shortId = containerId.substr(0, 12);
     std::wstring execCmd = L"docker exec -it " + std::wstring(shortId.begin(), shortId.end()) + L" /bin/sh";
     wprintf(L"Connecting to %hs...\n", shortId.c_str());
+    _flushall();
     return launchAndWait(execCmd);
 }
 
@@ -614,6 +704,7 @@ int wmain()
             }
 
             renderFooter();
+            _flushall();
             needsRedraw = false;
         }
 
