@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <set>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -84,12 +85,50 @@ void moveTo(int row, int col)
 
 void clearScreen()
 {
-    wprintf(L"\x1b[2J\x1b[H");
+    // Dark blue background fill
+    wprintf(L"\x1b[48;2;15;23;42m\x1b[2J\x1b[H");
 }
 
 void hideCursor()
 {
     wprintf(L"\x1b[?25l");
+}
+
+// Theme: dark navy background, yellow highlights, white text, cyan accents
+void setThemeBg()
+{
+    wprintf(L"\x1b[48;2;15;23;42m");
+}
+
+void setColorYellow()
+{
+    wprintf(L"\x1b[38;2;255;215;0m\x1b[48;2;15;23;42m");
+}
+
+void setColorWhite()
+{
+    wprintf(L"\x1b[38;2;240;240;240m\x1b[48;2;15;23;42m");
+}
+
+void setColorCyan()
+{
+    wprintf(L"\x1b[38;2;100;220;255m\x1b[48;2;15;23;42m");
+}
+
+void setColorDimCyan()
+{
+    wprintf(L"\x1b[38;2;60;140;180m\x1b[48;2;15;23;42m");
+}
+
+void setColorHighlight()
+{
+    // Selected item: bright yellow on slightly lighter navy
+    wprintf(L"\x1b[38;2;255;230;50m\x1b[48;2;30;45;80m");
+}
+
+void setColorDim()
+{
+    wprintf(L"\x1b[38;2;100;120;160m\x1b[48;2;15;23;42m");
 }
 
 void setColor(int fg, int bg)
@@ -109,12 +148,56 @@ void setBold()
 
 void setDim()
 {
-    wprintf(L"\x1b[2m");
+    setColorDim();
 }
 
 void setReverse()
 {
-    wprintf(L"\x1b[7m");
+    setColorHighlight();
+}
+
+// ─── Splash Screen ──────────────────────────────────────────────────────────
+
+void showSplash()
+{
+    clearScreen();
+
+    // Figlet-style "LAUNCH" in block characters
+    static const wchar_t* logo[] = {
+        L"  ██╗      █████╗ ██╗   ██╗███╗   ██╗ ██████╗██╗  ██╗",
+        L"  ██║     ██╔══██╗██║   ██║████╗  ██║██╔════╝██║  ██║",
+        L"  ██║     ███████║██║   ██║██╔██╗ ██║██║     ███████║",
+        L"  ██║     ██╔══██║██║   ██║██║╚██╗██║██║     ██╔══██║",
+        L"  ███████╗██║  ██║╚██████╔╝██║ ╚████║╚██████╗██║  ██║",
+        L"  ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝",
+    };
+
+    int startRow = (termHeight / 2) - 5;
+    if (startRow < 1) startRow = 1;
+
+    // Animate: reveal line by line with color sweep
+    for (int i = 0; i < 6; i++)
+    {
+        moveTo(startRow + i, 1);
+        // Gradient from cyan to yellow across the logo
+        float t = (float)i / 5.0f;
+        int r = (int)(100 + t * 155);
+        int g = (int)(220 - t * 5);
+        int b = (int)(255 - t * 205);
+        wprintf(L"\x1b[38;2;%d;%d;%dm\x1b[48;2;15;23;42m%ls", r, g, b, logo[i]);
+        _flushall();
+        Sleep(50);
+    }
+
+    // Subtitle
+    moveTo(startRow + 7, 1);
+    setColorDimCyan();
+    wprintf(L"          Terminal Session Launcher");
+    _flushall();
+    Sleep(100);
+
+    // Brief pause then fade
+    Sleep(300);
 }
 
 // ─── Docker Helpers ─────────────────────────────────────────────────────────
@@ -390,7 +473,7 @@ std::vector<ListItem> enumerateSessions()
                 continue;
 
             ListItem li{};
-            li.command = L"gh copilot-cli --resume " + id;
+            li.command = L"copilot --resume=" + id;
 
             // Use session name from workspace.yaml first, then plan.md
             if (!sessionName.empty() && sessionName != L"|-")
@@ -475,7 +558,7 @@ std::vector<ListItem> enumerateApps()
         { L"Serial Console", L"C:\\source\\serial-terminal\\bin\\Release\\net10.0\\win-x64\\native\\serial-terminal.exe", L"Serial Terminal" },
         { L"Git Bash", L"C:\\Program Files\\Git\\bin\\bash.exe", L"Git for Windows" },
         { L"WSL (Default)", L"wsl.exe", L"Windows Subsystem for Linux" },
-        { L"GitHub Copilot CLI", L"gh copilot-cli", L"Copilot in the CLI" },
+        { L"GitHub Copilot CLI", L"copilot", L"Copilot in the CLI" },
         { L"Python", L"python.exe", L"Python REPL" },
         { L"Node.js", L"node.exe", L"Node.js REPL" },
     };
@@ -676,36 +759,34 @@ std::vector<ListItem> enumerateContainers()
 void renderTabs(Tab currentTab)
 {
     moveTo(1, 1);
-    resetColor();
+    setThemeBg();
+    wprintf(L"\x1b[2K");
 
     for (int i = 0; i < (int)Tab::COUNT; i++)
     {
         if (i == (int)currentTab)
         {
-            setReverse();
+            setColorYellow();
             setBold();
             wprintf(L" [%d] %ls ", i + 1, TabNames[i]);
-            resetColor();
         }
         else
         {
-            setDim();
+            setColorDimCyan();
             wprintf(L"  %d  %ls ", i + 1, TabNames[i]);
-            resetColor();
         }
     }
     wprintf(L"\n");
 
     // Separator line
-    resetColor();
-    setDim();
+    setColorDimCyan();
     for (int i = 0; i < termWidth; i++)
         wprintf(L"\u2500");
-    resetColor();
+    setThemeBg();
     wprintf(L"\n");
 }
 
-void renderList(const std::vector<ListItem>& items, int selectedIndex, int scrollOffset)
+void renderList(const std::vector<ListItem>& items, int selectedIndex, int scrollOffset, const std::set<int>* checked = nullptr)
 {
     int maxVisible = termHeight - 6; // tabs(2) + footer(2) + padding
     if (maxVisible < 1) maxVisible = 1;
@@ -726,6 +807,16 @@ void renderList(const std::vector<ListItem>& items, int selectedIndex, int scrol
         if (idx == selectedIndex)
         {
             setReverse();
+        }
+
+        // Checkbox or arrow indicator
+        if (checked)
+        {
+            bool isChecked = checked->count(idx) > 0;
+            wprintf(L" %ls ", isChecked ? L"\u2611" : L"\u2610");
+        }
+        else if (idx == selectedIndex)
+        {
             wprintf(L" \u25B6 ");
         }
         else
@@ -807,13 +898,28 @@ void renderNewContainerInput(const std::wstring& imageName, bool focused)
     resetColor();
 }
 
-void renderFooter()
+void renderFooter(Tab currentTab, size_t checkedCount)
 {
     moveTo(termHeight - 1, 1);
     wprintf(L"\x1b[2K");
-    setDim();
-    wprintf(L"  [\u2191\u2193] Navigate  [Tab/1-4] Switch tab  [Enter] Select  [Esc] Cancel");
-    resetColor();
+    setColorDimCyan();
+    if (currentTab == Tab::Sessions)
+    {
+        if (checkedCount > 0)
+        {
+            setColorYellow();
+            wprintf(L"  [Enter] Launch %zu selected", checkedCount);
+            setColorDimCyan();
+            wprintf(L"  [\u2191\u2193] Navigate  [Space] Toggle  [Tab] Switch  [Esc] Cancel");
+        }
+        else
+            wprintf(L"  [\u2191\u2193] Navigate  [Space] Multi-select  [Enter] Launch  [Tab] Switch  [Esc] Cancel");
+    }
+    else
+    {
+        wprintf(L"  [\u2191\u2193] Navigate  [Tab/1-4] Switch tab  [Enter] Select  [Esc] Cancel");
+    }
+    setThemeBg();
 }
 
 void renderEmpty()
@@ -828,7 +934,7 @@ void renderEmpty()
 
 struct KeyEvent
 {
-    enum Type { None, Up, Down, Left, Right, Enter, Escape, Tab, Char, Number } type = None;
+    enum Type { None, Up, Down, Left, Right, Enter, Escape, Tab, Space, Char, Number } type = None;
     wchar_t ch = 0;
     int number = 0;
 };
@@ -862,6 +968,7 @@ KeyEvent readKey()
         if (vk == VK_RETURN) return { KeyEvent::Enter };
         if (vk == VK_ESCAPE) return { KeyEvent::Escape };
         if (vk == VK_TAB) return { KeyEvent::Tab };
+        if (vk == VK_SPACE) return { KeyEvent::Space };
         if (vk == VK_BACK) return { KeyEvent::Char, L'\b' };
 
         if (ch >= L'1' && ch <= L'4') return { KeyEvent::Number, 0, ch - L'0' };
@@ -945,7 +1052,7 @@ int createNewCopilotSession()
     _flushall();
 
     // Launch copilot in the new folder
-    return launchInDir(L"cmd.exe /k gh copilot-cli", targetDir.wstring());
+    return launchInDir(L"copilot", targetDir.wstring());
 }
 
 int createContainerAndConnect(const std::wstring& image)
@@ -1013,10 +1120,14 @@ int wmain()
     enableVT();
     hideCursor();
 
+    // Show splash animation
+    showSplash();
+
     Tab currentTab = Tab::Sessions;
     int selectedIndex = 0;
     int scrollOffset = 0;
     std::wstring newContainerImage;
+    std::set<int> checkedItems; // Multi-select for Sessions tab
 
     // Pre-load data for all tabs
     std::vector<ListItem> tabData[(int)Tab::COUNT];
@@ -1044,11 +1155,13 @@ int wmain()
                 const auto& items = tabData[(int)currentTab];
                 if (items.empty())
                     renderEmpty();
+                else if (currentTab == Tab::Sessions)
+                    renderList(items, selectedIndex, scrollOffset, &checkedItems);
                 else
                     renderList(items, selectedIndex, scrollOffset);
             }
 
-            renderFooter();
+            renderFooter(currentTab, checkedItems.size());
             _flushall();
             needsRedraw = false;
         }
@@ -1116,6 +1229,25 @@ int wmain()
             }
             break;
 
+        case KeyEvent::Space:
+            if (currentTab == Tab::Sessions)
+            {
+                const auto& items = tabData[(int)Tab::Sessions];
+                if (selectedIndex < (int)items.size())
+                {
+                    // Don't allow checking the "__NEW_SESSION__" item
+                    if (items[selectedIndex].command != L"__NEW_SESSION__")
+                    {
+                        if (checkedItems.count(selectedIndex))
+                            checkedItems.erase(selectedIndex);
+                        else
+                            checkedItems.insert(selectedIndex);
+                        needsRedraw = true;
+                    }
+                }
+            }
+            break;
+
         case KeyEvent::Enter:
             if (currentTab == Tab::NewContainer)
             {
@@ -1123,6 +1255,28 @@ int wmain()
                 {
                     return createContainerAndConnect(newContainerImage);
                 }
+            }
+            else if (currentTab == Tab::Sessions && !checkedItems.empty())
+            {
+                // Multi-launch: spawn all checked sessions in separate windows
+                restoreConsole();
+                const auto& items = tabData[(int)Tab::Sessions];
+                for (int idx : checkedItems)
+                {
+                    if (idx >= (int)items.size()) continue;
+                    const auto& cmd = items[idx].command;
+                    if (cmd.find(L"__") == 0) continue; // skip placeholders
+
+                    // Launch each in a new Terminal window using wt.exe
+                    std::wstring wtCmd = L"wt.exe new-tab -- " + cmd;
+                    STARTUPINFOW si{};
+                    si.cb = sizeof(si);
+                    PROCESS_INFORMATION pi{};
+                    CreateProcessW(nullptr, wtCmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi);
+                    if (pi.hProcess) CloseHandle(pi.hProcess);
+                    if (pi.hThread) CloseHandle(pi.hThread);
+                }
+                return 0;
             }
             else
             {
@@ -1175,7 +1329,14 @@ int wmain()
                 {
                     newContainerImage += key.ch;
                 }
-                needsRedraw = true;
+                // Fast update: just redraw the input field, not the whole screen
+                moveTo(5, 1);
+                wprintf(L"\x1b[2K");
+                wprintf(L"  Image name: ");
+                setReverse();
+                wprintf(L" %ls ", newContainerImage.empty() ? L"(type image e.g. ubuntu:latest)" : newContainerImage.c_str());
+                resetColor();
+                _flushall();
             }
             break;
 
