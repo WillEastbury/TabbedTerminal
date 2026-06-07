@@ -5939,7 +5939,7 @@ namespace winrt::TerminalApp::implementation
         WUX::Controls::Grid::SetColumn(colorBar, 0);
         grid.Children().Append(colorBar);
 
-        // Update color bar from tab's current color
+        // Update color bar from tab's current color, and apply to grid background
         auto tabImpl = _GetTabImpl(tab);
         if (tabImpl)
         {
@@ -5947,6 +5947,10 @@ namespace winrt::TerminalApp::implementation
             if (tabColor.has_value())
             {
                 colorBar.Background(WUX::Media::SolidColorBrush{ tabColor.value() });
+                // Apply a semi-transparent version to the whole tab background
+                auto bgColor = tabColor.value();
+                bgColor.A = 40; // subtle tint
+                grid.Background(WUX::Media::SolidColorBrush{ bgColor });
             }
         }
 
@@ -6050,6 +6054,67 @@ namespace winrt::TerminalApp::implementation
             }
         });
         contextMenu.Items().Append(colorMenuItem);
+
+        // Move Up menu item
+        auto moveUpItem = WUX::Controls::MenuFlyoutItem();
+        moveUpItem.Text(L"Move Up");
+        WUX::Controls::FontIcon upIcon;
+        upIcon.FontFamily(WUX::Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
+        upIcon.Glyph(L"\xE74A");
+        moveUpItem.Icon(upIcon);
+        moveUpItem.Click([weakThis](auto&&, auto&&) {
+            if (auto page = weakThis.get())
+            {
+                auto selectedIdx = page->_verticalTabListView.SelectedIndex();
+                if (selectedIdx > 0 && selectedIdx < gsl::narrow_cast<int32_t>(page->_tabs.Size()))
+                {
+                    // Swap in the tab list
+                    auto tab = page->_tabs.GetAt(selectedIdx);
+                    page->_tabs.RemoveAt(selectedIdx);
+                    page->_tabs.InsertAt(selectedIdx - 1, tab);
+
+                    // Swap in the ListView
+                    auto items = page->_verticalTabListView.Items();
+                    auto item = items.GetAt(selectedIdx);
+                    items.RemoveAt(selectedIdx);
+                    items.InsertAt(selectedIdx - 1, item);
+
+                    page->_verticalTabListView.SelectedIndex(selectedIdx - 1);
+                }
+            }
+        });
+        contextMenu.Items().Append(moveUpItem);
+
+        // Move Down menu item
+        auto moveDownItem = WUX::Controls::MenuFlyoutItem();
+        moveDownItem.Text(L"Move Down");
+        WUX::Controls::FontIcon downIcon;
+        downIcon.FontFamily(WUX::Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
+        downIcon.Glyph(L"\xE74B");
+        moveDownItem.Icon(downIcon);
+        moveDownItem.Click([weakThis](auto&&, auto&&) {
+            if (auto page = weakThis.get())
+            {
+                auto selectedIdx = page->_verticalTabListView.SelectedIndex();
+                if (selectedIdx >= 0 && selectedIdx < gsl::narrow_cast<int32_t>(page->_tabs.Size()) - 1)
+                {
+                    // Swap in the tab list
+                    auto tab = page->_tabs.GetAt(selectedIdx);
+                    page->_tabs.RemoveAt(selectedIdx);
+                    page->_tabs.InsertAt(selectedIdx + 1, tab);
+
+                    // Swap in the ListView
+                    auto items = page->_verticalTabListView.Items();
+                    auto item = items.GetAt(selectedIdx);
+                    items.RemoveAt(selectedIdx);
+                    items.InsertAt(selectedIdx + 1, item);
+
+                    page->_verticalTabListView.SelectedIndex(selectedIdx + 1);
+                }
+            }
+        });
+        contextMenu.Items().Append(moveDownItem);
+
         grid.ContextFlyout(contextMenu);
 
         _verticalTabListView.Items().InsertAt(index, grid);
@@ -6146,10 +6211,14 @@ namespace winrt::TerminalApp::implementation
                                             if (tabColor.has_value())
                                             {
                                                 cb.Background(WUX::Media::SolidColorBrush{ tabColor.value() });
+                                                auto bgColor = tabColor.value();
+                                                bgColor.A = 40;
+                                                itemGrid.Background(WUX::Media::SolidColorBrush{ bgColor });
                                             }
                                             else
                                             {
                                                 cb.Background(WUX::Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+                                                itemGrid.Background(WUX::Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
                                             }
                                         }
                                         return;

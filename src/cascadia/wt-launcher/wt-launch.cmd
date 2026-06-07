@@ -9,46 +9,37 @@ set "CMDFILE=%TEMP%\wt-launcher-cmd-%TOKEN%.txt"
 set "WT_LAUNCHER_CMDFILE=%CMDFILE%"
 
 :: Run the TUI launcher
-"%~dp0wt-launcher.exe"
+"%~dp0wt-launcher.exe" 2>nul
 set LAUNCHER_EXIT=%ERRORLEVEL%
 
-:: If exit code is 42 (relaunch), read the command file and execute
-if "%LAUNCHER_EXIT%"=="42" (
-    if not exist "!CMDFILE!" (
-        echo Launcher exited with relaunch code but no command file found.
-        exit /b 1
-    )
+:: If exit code is not 42, just exit cleanly
+if not "%LAUNCHER_EXIT%"=="42" exit /b 0
 
-    :: Read lines: first = primary command, CWD= prefix = working dir, others = multi-launch
-    set "CMD="
-    set "CWD="
-    for /f "usebackq delims=" %%a in ("!CMDFILE!") do (
-        if not defined CMD (
-            set "CMD=%%a"
+:: Check command file exists
+if not exist "!CMDFILE!" exit /b 0
+
+:: Read lines: first = primary command, CWD= prefix = working dir, others = multi-launch
+set "CMD="
+set "CWD="
+for /f "usebackq delims=" %%a in ("!CMDFILE!") do (
+    if not defined CMD (
+        set "CMD=%%a"
+    ) else (
+        set "LINE=%%a"
+        if "!LINE:~0,4!"=="CWD=" (
+            set "CWD=!LINE:~4!"
         ) else (
-            set "LINE=%%a"
-            if "!LINE:~0,4!"=="CWD=" (
-                set "CWD=!LINE:~4!"
-            ) else (
-                :: Additional commands = launch directly as new console processes
-                :: Terminal will host these since it's the registered default terminal
-                start "" cmd /k %%a
-            )
+            :: Additional commands = launch directly as new console processes
+            start "" "%%a" 2>nul
         )
     )
-
-    :: Clean up the command file
-    del "!CMDFILE!" 2>nul
-
-    :: Change to working directory if specified
-    if defined CWD (
-        cd /d "!CWD!"
-    )
-
-    :: Execute the primary command (replaces this shell process)
-    if defined CMD (
-        !CMD!
-    )
-) else (
-    exit /b %LAUNCHER_EXIT%
 )
+
+:: Clean up the command file
+del "!CMDFILE!" 2>nul
+
+:: Change to working directory if specified
+if defined CWD cd /d "!CWD!" 2>nul
+
+:: Execute the primary command (replaces this shell process)
+if defined CMD !CMD!
