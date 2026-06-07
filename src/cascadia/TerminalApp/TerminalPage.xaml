@@ -34,6 +34,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <ListView x:Name="VerticalTabListView"
@@ -79,12 +80,28 @@
 
             <Button x:Name="VerticalSettingsButton"
                     Grid.Row="3"
-                    Margin="4,2,4,8"
+                    Margin="4,2,4,2"
                     Padding="8,6"
                     HorizontalAlignment="Stretch"
                     Content="&#xE713;"
                     FontFamily="{ThemeResource SymbolThemeFontFamily}"
                     FontSize="12" />
+
+            <Button x:Name="UpdateRestartButton"
+                    Grid.Row="4"
+                    Margin="4,2,4,8"
+                    Padding="8,6"
+                    HorizontalAlignment="Stretch"
+                    Click="_OnUpdateRestartClick"
+                    ToolTipService.ToolTip="Rebuild &amp; Restart">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="6">
+                    <TextBlock Text="&#xE72C;"
+                               FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                               FontSize="12" />
+                    <TextBlock Text="Update"
+                               FontSize="11" />
+                </StackPanel>
+            </Button>
         </Grid>
 
         <!-- Resize grip between sidebar and content -->

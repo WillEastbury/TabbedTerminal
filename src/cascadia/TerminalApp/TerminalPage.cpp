@@ -6035,7 +6035,8 @@ namespace winrt::TerminalApp::implementation
         colorIcon.FontFamily(WUX::Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
         colorIcon.Glyph(L"\xE790");
         colorMenuItem.Icon(colorIcon);
-        colorMenuItem.Click([weakThis](auto&&, auto&&) {
+        auto gridWeak = winrt::make_weak(grid);
+        colorMenuItem.Click([weakThis, gridWeak](auto&&, auto&&) {
             if (auto page = weakThis.get())
             {
                 auto selectedIdx = page->_verticalTabListView.SelectedIndex();
@@ -6048,7 +6049,17 @@ namespace winrt::TerminalApp::implementation
                         {
                             page->_tabColorPicker = winrt::make<ColorPickupFlyout>();
                         }
+
+                        // AttachColorPicker wires events and calls ShowAt(TabViewItem())
+                        // which is invisible in vertical mode — so we immediately re-show
+                        // on the sidebar grid item
                         selectedTabImpl->AttachColorPicker(page->_tabColorPicker);
+                        page->_tabColorPicker.Hide();
+
+                        if (auto g = gridWeak.get())
+                        {
+                            page->_tabColorPicker.ShowAt(g);
+                        }
                     }
                 }
             }
@@ -6068,18 +6079,30 @@ namespace winrt::TerminalApp::implementation
                 auto selectedIdx = page->_verticalTabListView.SelectedIndex();
                 if (selectedIdx > 0 && selectedIdx < gsl::narrow_cast<int32_t>(page->_tabs.Size()))
                 {
+                    page->_rearranging = true;
+
                     // Swap in the tab list
                     auto tab = page->_tabs.GetAt(selectedIdx);
                     page->_tabs.RemoveAt(selectedIdx);
                     page->_tabs.InsertAt(selectedIdx - 1, tab);
 
-                    // Swap in the ListView
+                    // Swap in the TabView (horizontal, keeps content pane mapping correct)
+                    auto tabViewItem = tab.TabViewItem();
+                    uint32_t tvIdx = 0;
+                    if (page->_tabView.TabItems().IndexOf(tabViewItem, tvIdx) && tvIdx > 0)
+                    {
+                        page->_tabView.TabItems().RemoveAt(tvIdx);
+                        page->_tabView.TabItems().InsertAt(tvIdx - 1, tabViewItem);
+                    }
+
+                    // Swap in the sidebar ListView
                     auto items = page->_verticalTabListView.Items();
                     auto item = items.GetAt(selectedIdx);
                     items.RemoveAt(selectedIdx);
                     items.InsertAt(selectedIdx - 1, item);
 
                     page->_verticalTabListView.SelectedIndex(selectedIdx - 1);
+                    page->_rearranging = false;
                 }
             }
         });
@@ -6098,18 +6121,30 @@ namespace winrt::TerminalApp::implementation
                 auto selectedIdx = page->_verticalTabListView.SelectedIndex();
                 if (selectedIdx >= 0 && selectedIdx < gsl::narrow_cast<int32_t>(page->_tabs.Size()) - 1)
                 {
+                    page->_rearranging = true;
+
                     // Swap in the tab list
                     auto tab = page->_tabs.GetAt(selectedIdx);
                     page->_tabs.RemoveAt(selectedIdx);
                     page->_tabs.InsertAt(selectedIdx + 1, tab);
 
-                    // Swap in the ListView
+                    // Swap in the TabView (horizontal, keeps content pane mapping correct)
+                    auto tabViewItem = tab.TabViewItem();
+                    uint32_t tvIdx = 0;
+                    if (page->_tabView.TabItems().IndexOf(tabViewItem, tvIdx) && tvIdx < page->_tabView.TabItems().Size() - 1)
+                    {
+                        page->_tabView.TabItems().RemoveAt(tvIdx);
+                        page->_tabView.TabItems().InsertAt(tvIdx + 1, tabViewItem);
+                    }
+
+                    // Swap in the sidebar ListView
                     auto items = page->_verticalTabListView.Items();
                     auto item = items.GetAt(selectedIdx);
                     items.RemoveAt(selectedIdx);
                     items.InsertAt(selectedIdx + 1, item);
 
                     page->_verticalTabListView.SelectedIndex(selectedIdx + 1);
+                    page->_rearranging = false;
                 }
             }
         });
@@ -6519,6 +6554,30 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_OnCopilotSessionPickerClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
     {
         _ShowCopilotSessionPicker();
+    }
+
+    void TerminalPage::_OnUpdateRestartClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        // Spawn a detached process that waits briefly for us to exit, then re-registers the package
+        std::wstring script =
+            L"powershell.exe -NoProfile -WindowStyle Hidden -Command \""
+            L"Start-Sleep -Seconds 2; "
+            L"Add-AppxPackage -Register 'C:\\source\\terminal\\src\\cascadia\\CascadiaPackage\\bin\\x64\\Debug\\AppX\\AppxManifest.xml' -ForceApplicationShutdown; "
+            L"Start-Sleep -Seconds 1; "
+            L"Start-Process 'shell:AppsFolder\\WindowsTerminalDev_8wekyb3d8bbwe!App'"
+            L"\"";
+
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        CreateProcessW(nullptr, script.data(), nullptr, nullptr, FALSE,
+            CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | DETACHED_PROCESS,
+            nullptr, nullptr, &si, &pi);
+        if (pi.hProcess) CloseHandle(pi.hProcess);
+        if (pi.hThread) CloseHandle(pi.hThread);
+
+        // Now close this window - the detached process will re-register and relaunch
+        CloseWindowRequested.raise(*this, nullptr);
     }
 
     void TerminalPage::_ShowCopilotSessionPicker()

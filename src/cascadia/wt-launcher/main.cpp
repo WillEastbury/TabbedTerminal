@@ -39,10 +39,16 @@ enum class Tab
     Containers,
     NewContainer,
     Serial,
+    SSHHosts,
+    WebApps,
+    Win32Apps,
     COUNT
 };
 
-static const wchar_t* TabNames[(int)Tab::COUNT] = { L"Sessions", L"Apps", L"Containers", L"New Container", L"Serial" };
+static const wchar_t* TabNames[(int)Tab::COUNT] = {
+    L"Sessions", L"Apps", L"Containers", L"New Container", L"Serial",
+    L"SSH", L"Web", L"Win32"
+};
 
 // ─── Terminal Helpers ────────────────────────────────────────────────────────
 
@@ -633,6 +639,222 @@ std::vector<ListItem> enumerateApps()
     return items;
 }
 
+// ─── Config File Helpers ────────────────────────────────────────────────────
+
+static std::wstring getConfigDir()
+{
+    return L"C:\\launcher";
+}
+
+// Simple config format: one entry per line, fields separated by |
+// SSH: alias|hostname|user|port|tmux(0/1)
+// Web: alias|url
+
+static std::vector<std::vector<std::wstring>> loadConfig(const std::wstring& filename)
+{
+    std::vector<std::vector<std::wstring>> entries;
+    std::wifstream f(getConfigDir() + L"\\" + filename);
+    if (!f.is_open()) return entries;
+
+    std::wstring line;
+    while (std::getline(f, line))
+    {
+        if (line.empty() || line[0] == L'#') continue;
+        std::vector<std::wstring> fields;
+        std::wistringstream ss(line);
+        std::wstring field;
+        while (std::getline(ss, field, L'|'))
+            fields.push_back(field);
+        if (!fields.empty())
+            entries.push_back(std::move(fields));
+    }
+    return entries;
+}
+
+static void saveConfig(const std::wstring& filename, const std::vector<std::vector<std::wstring>>& entries)
+{
+    std::wofstream f(getConfigDir() + L"\\" + filename);
+    if (!f.is_open()) return;
+    for (const auto& entry : entries)
+    {
+        for (size_t i = 0; i < entry.size(); i++)
+        {
+            if (i > 0) f << L'|';
+            f << entry[i];
+        }
+        f << std::endl;
+    }
+}
+
+// ─── SSH Host Management ────────────────────────────────────────────────────
+
+struct SSHHost
+{
+    std::wstring alias;
+    std::wstring hostname;
+    std::wstring user;
+    int port = 22;
+    bool useTmux = true;
+};
+
+static std::vector<SSHHost> loadSSHHosts()
+{
+    std::vector<SSHHost> hosts;
+    auto entries = loadConfig(L"hosts.cfg");
+    for (const auto& e : entries)
+    {
+        if (e.size() < 3) continue;
+        SSHHost h;
+        h.alias = e[0];
+        h.hostname = e[1];
+        h.user = e[2];
+        h.port = (e.size() > 3) ? _wtoi(e[3].c_str()) : 22;
+        h.useTmux = (e.size() > 4) ? (e[4] == L"1") : true;
+        if (h.port <= 0) h.port = 22;
+        hosts.push_back(std::move(h));
+    }
+    return hosts;
+}
+
+static void saveSSHHosts(const std::vector<SSHHost>& hosts)
+{
+    std::vector<std::vector<std::wstring>> entries;
+    for (const auto& h : hosts)
+    {
+        entries.push_back({
+            h.alias, h.hostname, h.user,
+            std::to_wstring(h.port),
+            h.useTmux ? L"1" : L"0"
+        });
+    }
+    saveConfig(L"hosts.cfg", entries);
+}
+
+static std::wstring buildSSHCommand(const SSHHost& host)
+{
+    std::wstring cmd = L"ssh";
+    if (host.port != 22)
+        cmd += L" -p " + std::to_wstring(host.port);
+    cmd += L" " + host.user + L"@" + host.hostname;
+    if (host.useTmux)
+        cmd += L" -t \"tmux new-session -A -s main\"";
+    return cmd;
+}
+
+std::vector<ListItem> enumerateSSHHosts()
+{
+    std::vector<ListItem> items;
+
+    // "Add Host" option at top
+    ListItem addItem{};
+    addItem.name = L"\u2795 Add SSH Host";
+    addItem.detail = L"Configure a new connection";
+    addItem.command = L"__ADD_SSH_HOST__";
+    items.push_back(std::move(addItem));
+
+    auto hosts = loadSSHHosts();
+    for (const auto& h : hosts)
+    {
+        ListItem li{};
+        li.name = h.alias;
+        li.detail = h.user + L"@" + h.hostname +
+            (h.port != 22 ? L":" + std::to_wstring(h.port) : L"") +
+            (h.useTmux ? L" (tmux)" : L"");
+        li.timestamp = L"SSH";
+        li.command = buildSSHCommand(h);
+        items.push_back(std::move(li));
+    }
+    return items;
+}
+
+// ─── Web App Management ─────────────────────────────────────────────────────
+
+struct WebApp
+{
+    std::wstring alias;
+    std::wstring url;
+};
+
+static std::vector<WebApp> loadWebApps()
+{
+    std::vector<WebApp> apps;
+    auto entries = loadConfig(L"webapps.cfg");
+    for (const auto& e : entries)
+    {
+        if (e.size() < 2) continue;
+        apps.push_back({ e[0], e[1] });
+    }
+    return apps;
+}
+
+static void saveWebApps(const std::vector<WebApp>& apps)
+{
+    std::vector<std::vector<std::wstring>> entries;
+    for (const auto& a : apps)
+        entries.push_back({ a.alias, a.url });
+    saveConfig(L"webapps.cfg", entries);
+}
+
+std::vector<ListItem> enumerateWebApps()
+{
+    std::vector<ListItem> items;
+
+    ListItem addItem{};
+    addItem.name = L"\u2795 Add Web App";
+    addItem.detail = L"Add a URL to the list";
+    addItem.command = L"__ADD_WEB_APP__";
+    items.push_back(std::move(addItem));
+
+    auto apps = loadWebApps();
+    for (const auto& a : apps)
+    {
+        ListItem li{};
+        li.name = a.alias;
+        li.detail = a.url;
+        li.timestamp = L"Web";
+        li.command = L"WEB:" + a.url;
+        items.push_back(std::move(li));
+    }
+    return items;
+}
+
+// ─── Win32 App List ─────────────────────────────────────────────────────────
+
+std::vector<ListItem> enumerateWin32Apps()
+{
+    std::vector<ListItem> items;
+
+    struct Win32App
+    {
+        const wchar_t* name;
+        const wchar_t* exe;
+        const wchar_t* detail;
+    };
+    static const Win32App builtinApps[] = {
+        { L"Calculator", L"calc.exe", L"Windows Calculator" },
+        { L"Task Manager", L"taskmgr.exe", L"System Task Manager" },
+        { L"Notepad", L"notepad.exe", L"Text Editor" },
+        { L"Registry Editor", L"regedit.exe", L"Registry Editor" },
+        { L"Resource Monitor", L"resmon.exe", L"Resource Monitor" },
+        { L"Device Manager", L"devmgmt.msc", L"Device Manager" },
+        { L"Disk Management", L"diskmgmt.msc", L"Disk Management" },
+        { L"Services", L"services.msc", L"Windows Services" },
+        { L"Event Viewer", L"eventvwr.msc", L"Event Viewer" },
+    };
+
+    for (const auto& app : builtinApps)
+    {
+        ListItem li{};
+        li.name = app.name;
+        li.detail = app.detail;
+        li.timestamp = L"Win32";
+        li.command = std::wstring(L"REPARENT:") + app.exe;
+        items.push_back(std::move(li));
+    }
+
+    return items;
+}
+
 std::vector<ListItem> enumerateContainers()
 {
     std::vector<ListItem> items;
@@ -961,30 +1183,37 @@ void renderFooter(Tab currentTab, size_t checkedCount, bool yolo)
     // YOLO indicator
     if (yolo)
     {
-        wprintf(L"\x1b[38;2;255;50;50m\x1b[48;2;15;23;42m  [Y] YOLO \x1b[38;2;255;150;0m\x1b[48;2;15;23;42m ON ");
+        wprintf(L"\x1b[38;2;255;50;50m\x1b[48;2;15;23;42m  [Y] ALLOW-ALL \x1b[38;2;255;150;0m\x1b[48;2;15;23;42m ON ");
     }
     else
     {
         setColorDimCyan();
-        wprintf(L"  [Y] yolo off ");
+        wprintf(L"  [Y] allow-all ");
     }
 
     setColorDimCyan();
-    if (currentTab == Tab::Sessions)
+    bool isMultiSelectTab = (currentTab == Tab::Sessions || currentTab == Tab::SSHHosts || currentTab == Tab::WebApps);
+
+    if (isMultiSelectTab)
     {
         if (checkedCount > 0)
         {
             setColorYellow();
             wprintf(L" [Enter] Launch %zu", checkedCount);
             setColorDimCyan();
-            wprintf(L"  [\u2191\u2193] Nav  [Space] Toggle  [Tab] Switch  [Esc] Quit");
+            wprintf(L"  [\u2191\u2193] Nav  [Space] Toggle");
         }
         else
-            wprintf(L" [\u2191\u2193] Nav  [Space] Multi-select  [Enter] Launch  [Tab] Switch  [Esc] Quit");
+            wprintf(L" [\u2191\u2193] Nav  [Space] Multi-select  [Enter] Launch");
+
+        if (currentTab == Tab::SSHHosts || currentTab == Tab::WebApps)
+            wprintf(L"  [D] Delete");
+
+        wprintf(L"  [R] Refresh  [Esc] Quit");
     }
     else
     {
-        wprintf(L" [\u2191\u2193] Nav  [Tab/1-%d] Switch  [Enter] Select  [Esc] Quit", (int)Tab::COUNT);
+        wprintf(L" [\u2191\u2193] Nav  [Enter] Select  [R] Refresh  [Esc] Quit");
     }
     setThemeBg();
 }
@@ -1443,6 +1672,97 @@ int launchAndWait(const std::wstring& commandLine)
     return requestLaunch(commandLine);
 }
 
+// ─── Interactive Config Editors ─────────────────────────────────────────────
+
+static std::wstring readLineInput(const wchar_t* prompt)
+{
+    wprintf(L"  %ls", prompt);
+    _flushall();
+    wchar_t buf[512] = {};
+    DWORD charsRead = 0;
+    SetConsoleMode(hIn, ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+    ReadConsoleW(hIn, buf, 511, &charsRead, nullptr);
+    std::wstring result(buf, charsRead);
+    while (!result.empty() && (result.back() == L'\n' || result.back() == L'\r' || result.back() == L' '))
+        result.pop_back();
+    return result;
+}
+
+bool addSSHHostInteractive()
+{
+    restoreConsole();
+    wprintf(L"\x1b[?25h");
+    wprintf(L"\n  \x1b[1;36mAdd SSH Host\x1b[0m\n\n");
+
+    auto alias = readLineInput(L"Alias (display name): ");
+    if (alias.empty()) { wprintf(L"  Cancelled.\n"); return false; }
+
+    auto hostname = readLineInput(L"Hostname or IP: ");
+    if (hostname.empty()) { wprintf(L"  Cancelled.\n"); return false; }
+
+    auto user = readLineInput(L"Username: ");
+    if (user.empty()) { wprintf(L"  Cancelled.\n"); return false; }
+
+    auto portStr = readLineInput(L"Port [22]: ");
+    int port = portStr.empty() ? 22 : _wtoi(portStr.c_str());
+    if (port <= 0) port = 22;
+
+    auto tmuxStr = readLineInput(L"Use tmux? (Y/n): ");
+    bool useTmux = (tmuxStr.empty() || tmuxStr[0] == L'Y' || tmuxStr[0] == L'y');
+
+    auto hosts = loadSSHHosts();
+    hosts.push_back({ alias, hostname, user, port, useTmux });
+    saveSSHHosts(hosts);
+
+    wprintf(L"\n  \x1b[32m\u2713 Added: %ls (%ls@%ls)\x1b[0m\n", alias.c_str(), user.c_str(), hostname.c_str());
+    Sleep(800);
+    return true;
+}
+
+bool removeSSHHost(int index)
+{
+    auto hosts = loadSSHHosts();
+    if (index < 0 || index >= (int)hosts.size()) return false;
+    auto name = hosts[index].alias;
+    hosts.erase(hosts.begin() + index);
+    saveSSHHosts(hosts);
+    return true;
+}
+
+bool addWebAppInteractive()
+{
+    restoreConsole();
+    wprintf(L"\x1b[?25h");
+    wprintf(L"\n  \x1b[1;36mAdd Web App\x1b[0m\n\n");
+
+    auto alias = readLineInput(L"Name (display name): ");
+    if (alias.empty()) { wprintf(L"  Cancelled.\n"); return false; }
+
+    auto url = readLineInput(L"URL (e.g. http://192.168.0.200): ");
+    if (url.empty()) { wprintf(L"  Cancelled.\n"); return false; }
+
+    // Auto-prepend http:// if no scheme
+    if (url.find(L"://") == std::wstring::npos)
+        url = L"http://" + url;
+
+    auto apps = loadWebApps();
+    apps.push_back({ alias, url });
+    saveWebApps(apps);
+
+    wprintf(L"\n  \x1b[32m\u2713 Added: %ls \u2192 %ls\x1b[0m\n", alias.c_str(), url.c_str());
+    Sleep(800);
+    return true;
+}
+
+bool removeWebApp(int index)
+{
+    auto apps = loadWebApps();
+    if (index < 0 || index >= (int)apps.size()) return false;
+    apps.erase(apps.begin() + index);
+    saveWebApps(apps);
+    return true;
+}
+
 int createNewCopilotSession()
 {
     restoreConsole();
@@ -1563,7 +1883,7 @@ int wmain()
     int selectedIndex = 0;
     int scrollOffset = 0;
     std::wstring newContainerImage;
-    std::set<int> checkedItems; // Multi-select for Sessions tab
+    std::set<int> checkedItems; // Multi-select for Sessions/SSH/Web tabs
 
     // Pre-load data for all tabs
     std::vector<ListItem> tabData[(int)Tab::COUNT];
@@ -1571,6 +1891,9 @@ int wmain()
     tabData[(int)Tab::Apps] = enumerateApps();
     tabData[(int)Tab::Containers] = enumerateContainers();
     tabData[(int)Tab::Serial] = enumerateSerialPorts();
+    tabData[(int)Tab::SSHHosts] = enumerateSSHHosts();
+    tabData[(int)Tab::WebApps] = enumerateWebApps();
+    tabData[(int)Tab::Win32Apps] = enumerateWin32Apps();
     // Tab::NewContainer uses input mode, no list
 
     bool running = true;
@@ -1593,7 +1916,7 @@ int wmain()
                 const auto& items = tabData[(int)currentTab];
                 if (items.empty())
                     renderEmpty();
-                else if (currentTab == Tab::Sessions)
+                else if (currentTab == Tab::Sessions || currentTab == Tab::SSHHosts || currentTab == Tab::WebApps)
                     renderList(items, selectedIndex, scrollOffset, &checkedItems);
                 else
                     renderList(items, selectedIndex, scrollOffset);
@@ -1621,6 +1944,7 @@ int wmain()
             currentTab = (Tab)(((int)currentTab + 1) % (int)Tab::COUNT);
             selectedIndex = 0;
             scrollOffset = 0;
+            checkedItems.clear();
             needsRedraw = true;
             break;
 
@@ -1638,6 +1962,7 @@ int wmain()
                     currentTab = (Tab)(key.number - 1);
                     selectedIndex = 0;
                     scrollOffset = 0;
+                    checkedItems.clear();
                     needsRedraw = true;
                 }
             }
@@ -1668,13 +1993,13 @@ int wmain()
             break;
 
         case KeyEvent::Space:
-            if (currentTab == Tab::Sessions)
+            if (currentTab == Tab::Sessions || currentTab == Tab::SSHHosts || currentTab == Tab::WebApps)
             {
-                const auto& items = tabData[(int)Tab::Sessions];
+                const auto& items = tabData[(int)currentTab];
                 if (selectedIndex < (int)items.size())
                 {
-                    // Don't allow checking the "__NEW_SESSION__" item
-                    if (items[selectedIndex].command != L"__NEW_SESSION__")
+                    // Don't allow checking action items (Add, New Session, etc.)
+                    if (items[selectedIndex].command.find(L"__") != 0)
                     {
                         if (checkedItems.count(selectedIndex))
                             checkedItems.erase(selectedIndex);
@@ -1694,11 +2019,11 @@ int wmain()
                     return createContainerAndConnect(newContainerImage);
                 }
             }
-            else if (currentTab == Tab::Sessions && !checkedItems.empty())
+            else if ((currentTab == Tab::Sessions || currentTab == Tab::SSHHosts || currentTab == Tab::WebApps) && !checkedItems.empty())
             {
                 // Multi-launch: write all commands to the file, one per line
                 restoreConsole();
-                const auto& items = tabData[(int)Tab::Sessions];
+                const auto& items = tabData[(int)currentTab];
 
                 auto cmdFile = getLauncherCmdFilePath();
                 std::wofstream outFile(cmdFile);
@@ -1709,7 +2034,6 @@ int wmain()
                         if (idx >= (int)items.size()) continue;
                         auto cmd = items[idx].command;
                         if (cmd.find(L"__") == 0) continue;
-                        // Append --yolo if enabled and it's a copilot command
                         if (yoloMode && cmd.find(L"copilot") != std::wstring::npos)
                             cmd += L" --yolo";
                         outFile << cmd << std::endl;
@@ -1724,10 +2048,34 @@ int wmain()
                 if (!items.empty() && selectedIndex < (int)items.size())
                 {
                     const auto& cmd = items[selectedIndex].command;
+
+                    // ── Action items ──
                     if (cmd == L"__NEW_SESSION__")
                     {
                         g_yoloMode = yoloMode;
                         return createNewCopilotSession();
+                    }
+                    if (cmd == L"__ADD_SSH_HOST__")
+                    {
+                        addSSHHostInteractive();
+                        tabData[(int)Tab::SSHHosts] = enumerateSSHHosts();
+                        selectedIndex = 0;
+                        scrollOffset = 0;
+                        enableVT();
+                        hideCursor();
+                        needsRedraw = true;
+                        break;
+                    }
+                    if (cmd == L"__ADD_WEB_APP__")
+                    {
+                        addWebAppInteractive();
+                        tabData[(int)Tab::WebApps] = enumerateWebApps();
+                        selectedIndex = 0;
+                        scrollOffset = 0;
+                        enableVT();
+                        hideCursor();
+                        needsRedraw = true;
+                        break;
                     }
                     // Engine selection - set backend and refresh container list
                     if (cmd == L"__SELECT_DOCKER_DESKTOP__")
@@ -1801,6 +2149,45 @@ int wmain()
                 if (key.ch == L'y' || key.ch == L'Y')
                 {
                     yoloMode = !yoloMode;
+                    needsRedraw = true;
+                }
+                // D deletes the selected SSH host or web app
+                else if (key.ch == L'd' || key.ch == L'D')
+                {
+                    if (currentTab == Tab::SSHHosts && selectedIndex > 0) // index 0 = "Add" item
+                    {
+                        removeSSHHost(selectedIndex - 1);
+                        tabData[(int)Tab::SSHHosts] = enumerateSSHHosts();
+                        checkedItems.clear();
+                        if (selectedIndex >= (int)tabData[(int)Tab::SSHHosts].size())
+                            selectedIndex = std::max(0, (int)tabData[(int)Tab::SSHHosts].size() - 1);
+                        needsRedraw = true;
+                    }
+                    else if (currentTab == Tab::WebApps && selectedIndex > 0)
+                    {
+                        removeWebApp(selectedIndex - 1);
+                        tabData[(int)Tab::WebApps] = enumerateWebApps();
+                        checkedItems.clear();
+                        if (selectedIndex >= (int)tabData[(int)Tab::WebApps].size())
+                            selectedIndex = std::max(0, (int)tabData[(int)Tab::WebApps].size() - 1);
+                        needsRedraw = true;
+                    }
+                }
+                // R refreshes the current tab
+                else if (key.ch == L'r' || key.ch == L'R')
+                {
+                    tabData[(int)currentTab] =
+                        (currentTab == Tab::Sessions) ? enumerateSessions() :
+                        (currentTab == Tab::Apps) ? enumerateApps() :
+                        (currentTab == Tab::Containers) ? enumerateContainers() :
+                        (currentTab == Tab::Serial) ? enumerateSerialPorts() :
+                        (currentTab == Tab::SSHHosts) ? enumerateSSHHosts() :
+                        (currentTab == Tab::WebApps) ? enumerateWebApps() :
+                        (currentTab == Tab::Win32Apps) ? enumerateWin32Apps() :
+                        std::vector<ListItem>{};
+                    checkedItems.clear();
+                    selectedIndex = 0;
+                    scrollOffset = 0;
                     needsRedraw = true;
                 }
             }
