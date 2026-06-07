@@ -494,7 +494,9 @@ namespace winrt::TerminalApp::implementation
         // Copilot session picker
         void _OnCopilotSessionPickerClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _OnUpdateRestartClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
+        void _OnWebBrowserButtonClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _ShowCopilotSessionPicker();
+        void _CreateWebViewTab(const winrt::hstring& url, const winrt::hstring& title);
         struct CopilotSessionInfo
         {
             std::wstring id;

@@ -24,6 +24,7 @@
 #include "ScratchpadContent.h"
 #include "SettingsPaneContent.h"
 #include "SnippetsPaneContent.h"
+#include "WebViewPaneContent.h"
 #include "ColorPickupFlyout.h"
 #include "ContainerEnumerator.h"
 #include "TabRowControl.h"
@@ -6580,6 +6581,60 @@ namespace winrt::TerminalApp::implementation
         CloseWindowRequested.raise(*this, nullptr);
     }
 
+    void TerminalPage::_OnWebBrowserButtonClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
+    {
+        // Show an input dialog asking for URL
+        auto dialog = WUX::Controls::ContentDialog();
+        dialog.Title(winrt::box_value(L"Open Web Tab"));
+        dialog.PrimaryButtonText(L"Open");
+        dialog.CloseButtonText(L"Cancel");
+        dialog.DefaultButton(WUX::Controls::ContentDialogButton::Primary);
+
+        auto panel = WUX::Controls::StackPanel();
+        panel.Spacing(8);
+
+        auto urlLabel = WUX::Controls::TextBlock();
+        urlLabel.Text(L"Enter URL:");
+        panel.Children().Append(urlLabel);
+
+        auto urlInput = WUX::Controls::TextBox();
+        urlInput.PlaceholderText(L"https://example.com");
+        urlInput.Text(L"http://");
+        panel.Children().Append(urlInput);
+
+        dialog.Content(panel);
+
+        auto weakThis = get_weak();
+        auto urlInputWeak = winrt::make_weak(urlInput);
+
+        dialog.PrimaryButtonClick([weakThis, urlInputWeak](auto&&, auto&&) {
+            if (auto page = weakThis.get())
+            {
+                if (auto input = urlInputWeak.get())
+                {
+                    auto url = input.Text();
+                    if (!url.empty())
+                    {
+                        try
+                        {
+                            Windows::Foundation::Uri uri(url);
+                            page->_CreateWebViewTab(url, uri.Host());
+                        }
+                        catch (...)
+                        {
+                            page->_CreateWebViewTab(url, L"Web");
+                        }
+                    }
+                }
+            }
+        });
+
+        if (auto presenter{ _dialogPresenter.get() })
+        {
+            presenter.ShowDialog(dialog);
+        }
+    }
+
     void TerminalPage::_ShowCopilotSessionPicker()
     {
         auto weakThis = get_weak();
@@ -6617,5 +6672,13 @@ namespace winrt::TerminalApp::implementation
 
             self->_ShowDialogHelper(L"ContainerPickerDialog");
         });
+    }
+
+    // ─── WebView Browser Tab ────────────────────────────────────────────────
+    void TerminalPage::_CreateWebViewTab(const winrt::hstring& url, const winrt::hstring& title)
+    {
+        auto webContent = winrt::make<WebViewPaneContent>(url, title);
+        auto pane = std::make_shared<Pane>(webContent);
+        _CreateNewTabFromPane(pane);
     }
 }

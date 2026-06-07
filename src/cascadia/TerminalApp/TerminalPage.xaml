@@ -35,6 +35,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <ListView x:Name="VerticalTabListView"
@@ -89,7 +90,7 @@
 
             <Button x:Name="UpdateRestartButton"
                     Grid.Row="4"
-                    Margin="4,2,4,8"
+                    Margin="4,2,4,2"
                     Padding="8,6"
                     HorizontalAlignment="Stretch"
                     Click="_OnUpdateRestartClick"
@@ -99,6 +100,22 @@
                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                FontSize="12" />
                     <TextBlock Text="Update"
+                               FontSize="11" />
+                </StackPanel>
+            </Button>
+
+            <Button x:Name="WebBrowserButton"
+                    Grid.Row="5"
+                    Margin="4,2,4,8"
+                    Padding="8,6"
+                    HorizontalAlignment="Stretch"
+                    Click="_OnWebBrowserButtonClick"
+                    ToolTipService.ToolTip="Open Web Tab">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="6">
+                    <TextBlock Text="&#xE774;"
+                               FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                               FontSize="12" />
+                    <TextBlock Text="Web"
                                FontSize="11" />
                 </StackPanel>
             </Button>
