@@ -8,10 +8,6 @@ set "CMDFILE=%TEMP%\wt-launcher-cmd-%TOKEN%.txt"
 :: Pass the token via environment so the launcher knows where to write
 set "WT_LAUNCHER_CMDFILE=%CMDFILE%"
 
-:: Detect which Terminal to use for opening additional tabs
-:: Use wt.exe (the registered CLI shim) with -w 0 to target current window
-set "WT_EXE=wt.exe"
-
 :: Run the TUI launcher
 "%~dp0wt-launcher.exe"
 set LAUNCHER_EXIT=%ERRORLEVEL%
@@ -34,8 +30,9 @@ if "%LAUNCHER_EXIT%"=="42" (
             if "!LINE:~0,4!"=="CWD=" (
                 set "CWD=!LINE:~4!"
             ) else (
-                :: Additional commands = open as new tabs in the current window
-                "!WT_EXE!" -w 0 new-tab -- cmd /k %%a
+                :: Additional commands = launch directly as new console processes
+                :: Terminal will host these since it's the registered default terminal
+                start "" cmd /k %%a
             )
         )
     )
