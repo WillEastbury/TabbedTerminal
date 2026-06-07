@@ -187,7 +187,7 @@ void showSplash()
         int b = (int)(255 - t * 205);
         wprintf(L"\x1b[38;2;%d;%d;%dm\x1b[48;2;15;23;42m%ls", r, g, b, logo[i]);
         _flushall();
-        Sleep(60);
+        Sleep(15);
     }
 
     // Subtitle
@@ -195,10 +195,7 @@ void showSplash()
     setColorDimCyan();
     wprintf(L"      Terminal Session Launcher");
     _flushall();
-    Sleep(100);
-
-    // Brief pause then fade
-    Sleep(400);
+    Sleep(80);
 }
 
 // ─── Docker Helpers ─────────────────────────────────────────────────────────
@@ -370,6 +367,7 @@ std::string runDockerCapture(DockerBackend backend, const std::wstring& args)
 
 // Global: which backend is active (selected by user if both available)
 static DockerBackend g_activeBackend = DockerBackend::None;
+static bool g_yoloMode = false;
 
 // ─── Data Providers ─────────────────────────────────────────────────────────
 
@@ -955,26 +953,38 @@ void renderNewContainerInput(const std::wstring& imageName, bool focused)
     resetColor();
 }
 
-void renderFooter(Tab currentTab, size_t checkedCount)
+void renderFooter(Tab currentTab, size_t checkedCount, bool yolo)
 {
     moveTo(termHeight - 1, 1);
     wprintf(L"\x1b[2K");
+
+    // YOLO indicator
+    if (yolo)
+    {
+        wprintf(L"\x1b[38;2;255;50;50m\x1b[48;2;15;23;42m  [Y] YOLO \x1b[38;2;255;150;0m\x1b[48;2;15;23;42m ON ");
+    }
+    else
+    {
+        setColorDimCyan();
+        wprintf(L"  [Y] yolo off ");
+    }
+
     setColorDimCyan();
     if (currentTab == Tab::Sessions)
     {
         if (checkedCount > 0)
         {
             setColorYellow();
-            wprintf(L"  [Enter] Launch %zu selected", checkedCount);
+            wprintf(L" [Enter] Launch %zu", checkedCount);
             setColorDimCyan();
-            wprintf(L"  [\u2191\u2193] Navigate  [Space] Toggle  [Tab] Switch  [Esc] Cancel");
+            wprintf(L"  [\u2191\u2193] Nav  [Space] Toggle  [Tab] Switch  [Esc] Quit");
         }
         else
-            wprintf(L"  [\u2191\u2193] Navigate  [Space] Multi-select  [Enter] Launch  [Tab] Switch  [Esc] Cancel");
+            wprintf(L" [\u2191\u2193] Nav  [Space] Multi-select  [Enter] Launch  [Tab] Switch  [Esc] Quit");
     }
     else
     {
-        wprintf(L"  [\u2191\u2193] Navigate  [Tab/1-%d] Switch tab  [Enter] Select  [Esc] Cancel", (int)Tab::COUNT);
+        wprintf(L" [\u2191\u2193] Nav  [Tab/1-%d] Switch  [Enter] Select  [Esc] Quit", (int)Tab::COUNT);
     }
     setThemeBg();
 }
@@ -1397,6 +1407,13 @@ int requestLaunch(const std::wstring& commandLine, const std::wstring& workingDi
 
     auto cmdFile = getLauncherCmdFilePath();
 
+    // Append --yolo to copilot commands if YOLO mode is active
+    std::wstring finalCmd = commandLine;
+    if (g_yoloMode && (finalCmd.find(L"copilot") != std::wstring::npos))
+    {
+        finalCmd += L" --yolo";
+    }
+
     // Write command + optional working directory to the file
     std::wofstream outFile(cmdFile);
     if (!outFile.is_open())
@@ -1405,7 +1422,7 @@ int requestLaunch(const std::wstring& commandLine, const std::wstring& workingDi
         return 1;
     }
 
-    outFile << commandLine << std::endl;
+    outFile << finalCmd << std::endl;
     if (!workingDir.empty())
     {
         outFile << L"CWD=" << workingDir << std::endl;
@@ -1558,6 +1575,7 @@ int wmain()
 
     bool running = true;
     bool needsRedraw = true;
+    bool yoloMode = false; // --yolo flag for copilot launches
 
     while (running)
     {
@@ -1581,7 +1599,7 @@ int wmain()
                     renderList(items, selectedIndex, scrollOffset);
             }
 
-            renderFooter(currentTab, checkedItems.size());
+            renderFooter(currentTab, checkedItems.size(), yoloMode);
             _flushall();
             needsRedraw = false;
         }
@@ -1689,8 +1707,11 @@ int wmain()
                     for (int idx : checkedItems)
                     {
                         if (idx >= (int)items.size()) continue;
-                        const auto& cmd = items[idx].command;
+                        auto cmd = items[idx].command;
                         if (cmd.find(L"__") == 0) continue;
+                        // Append --yolo if enabled and it's a copilot command
+                        if (yoloMode && cmd.find(L"copilot") != std::wstring::npos)
+                            cmd += L" --yolo";
                         outFile << cmd << std::endl;
                     }
                     outFile.close();
@@ -1705,6 +1726,7 @@ int wmain()
                     const auto& cmd = items[selectedIndex].command;
                     if (cmd == L"__NEW_SESSION__")
                     {
+                        g_yoloMode = yoloMode;
                         return createNewCopilotSession();
                     }
                     // Engine selection - set backend and refresh container list
@@ -1738,6 +1760,7 @@ int wmain()
                         needsRedraw = true;
                         break;
                     }
+                    g_yoloMode = yoloMode;
                     return launchAndWait(cmd);
                 }
             }
@@ -1751,18 +1774,35 @@ int wmain()
                     if (!newContainerImage.empty())
                         newContainerImage.pop_back();
                 }
+                else if (key.ch == L'y' || key.ch == L'Y')
+                {
+                    yoloMode = !yoloMode;
+                    needsRedraw = true;
+                }
                 else
                 {
                     newContainerImage += key.ch;
                 }
                 // Fast update: just redraw the input field, not the whole screen
-                moveTo(5, 1);
-                wprintf(L"\x1b[2K");
-                wprintf(L"  Image name: ");
-                setReverse();
-                wprintf(L" %ls ", newContainerImage.empty() ? L"(type image e.g. ubuntu:latest)" : newContainerImage.c_str());
-                resetColor();
-                _flushall();
+                if (!needsRedraw)
+                {
+                    moveTo(5, 1);
+                    wprintf(L"\x1b[2K");
+                    wprintf(L"  Image name: ");
+                    setReverse();
+                    wprintf(L" %ls ", newContainerImage.empty() ? L"(type image e.g. ubuntu:latest)" : newContainerImage.c_str());
+                    resetColor();
+                    _flushall();
+                }
+            }
+            else
+            {
+                // Y toggles YOLO mode on any tab
+                if (key.ch == L'y' || key.ch == L'Y')
+                {
+                    yoloMode = !yoloMode;
+                    needsRedraw = true;
+                }
             }
             break;
 
