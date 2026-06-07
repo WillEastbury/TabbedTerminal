@@ -8,6 +8,13 @@ set "CMDFILE=%TEMP%\wt-launcher-cmd-%TOKEN%.txt"
 :: Pass the token via environment so the launcher knows where to write
 set "WT_LAUNCHER_CMDFILE=%CMDFILE%"
 
+:: Detect which Terminal exe we're running inside
+:: Use the AppX debug build if available, otherwise fall back to wt.exe
+set "WT_EXE=wt.exe"
+if exist "C:\source\terminal\src\cascadia\CascadiaPackage\bin\x64\Debug\AppX\wtd.exe" (
+    set "WT_EXE=C:\source\terminal\src\cascadia\CascadiaPackage\bin\x64\Debug\AppX\wtd.exe"
+)
+
 :: Run the TUI launcher
 "%~dp0wt-launcher.exe"
 set LAUNCHER_EXIT=%ERRORLEVEL%
@@ -30,8 +37,8 @@ if "%LAUNCHER_EXIT%"=="42" (
             if "!LINE:~0,4!"=="CWD=" (
                 set "CWD=!LINE:~4!"
             ) else (
-                :: Additional commands = open as new tabs
-                wt.exe new-tab -- %%a
+                :: Additional commands = open as new tabs in the SAME Terminal
+                "!WT_EXE!" new-tab -- %%a
             )
         )
     )

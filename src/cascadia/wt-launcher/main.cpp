@@ -164,42 +164,41 @@ void showSplash()
 {
     clearScreen();
 
-    // Figlet-style "LAUNCH" in block characters
+    // ASCII art "LAUNCH" - safe characters only
     static const wchar_t* logo[] = {
-        L"  ██╗      █████╗ ██╗   ██╗███╗   ██╗ ██████╗██╗  ██╗",
-        L"  ██║     ██╔══██╗██║   ██║████╗  ██║██╔════╝██║  ██║",
-        L"  ██║     ███████║██║   ██║██╔██╗ ██║██║     ███████║",
-        L"  ██║     ██╔══██║██║   ██║██║╚██╗██║██║     ██╔══██║",
-        L"  ███████╗██║  ██║╚██████╔╝██║ ╚████║╚██████╗██║  ██║",
-        L"  ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝",
+        L"  _                            _     ",
+        L" | |    __ _ _   _ _ __   ___| |__  ",
+        L" | |   / _` | | | | '_ \\ / __| '_ \\ ",
+        L" | |__| (_| | |_| | | | | (__| | | |",
+        L" |_____\\__,_|\\__,_|_| |_|\\___|_| |_|",
     };
 
-    int startRow = (termHeight / 2) - 5;
+    int startRow = (termHeight / 2) - 4;
     if (startRow < 1) startRow = 1;
 
     // Animate: reveal line by line with color sweep
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < 5; i++)
     {
         moveTo(startRow + i, 1);
         // Gradient from cyan to yellow across the logo
-        float t = (float)i / 5.0f;
+        float t = (float)i / 4.0f;
         int r = (int)(100 + t * 155);
         int g = (int)(220 - t * 5);
         int b = (int)(255 - t * 205);
         wprintf(L"\x1b[38;2;%d;%d;%dm\x1b[48;2;15;23;42m%ls", r, g, b, logo[i]);
         _flushall();
-        Sleep(50);
+        Sleep(60);
     }
 
     // Subtitle
-    moveTo(startRow + 7, 1);
+    moveTo(startRow + 6, 1);
     setColorDimCyan();
-    wprintf(L"          Terminal Session Launcher");
+    wprintf(L"      Terminal Session Launcher");
     _flushall();
     Sleep(100);
 
     // Brief pause then fade
-    Sleep(300);
+    Sleep(400);
 }
 
 // ─── Docker Helpers ─────────────────────────────────────────────────────────
