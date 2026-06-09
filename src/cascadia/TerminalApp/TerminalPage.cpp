@@ -6584,14 +6584,15 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_OnUpdateRestartClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
     {
-        // Spawn a detached process that waits briefly for us to exit, then re-registers the package
+        // Spawn a detached PowerShell that waits for us to exit, copies the
+        // freshly-built binaries into the AppX layout, bumps the manifest
+        // version, re-registers, and relaunches. Copying the binaries is the
+        // important bit: a plain Add-AppxPackage -Register re-registers the
+        // STALE layout and silently keeps running old code. The script lives in
+        // the repo (tools\redeploy-dev.ps1) so this logic stays maintainable.
         std::wstring script =
-            L"powershell.exe -NoProfile -WindowStyle Hidden -Command \""
-            L"Start-Sleep -Seconds 2; "
-            L"Add-AppxPackage -Register 'C:\\source\\terminal\\src\\cascadia\\CascadiaPackage\\bin\\x64\\Debug\\AppX\\AppxManifest.xml' -ForceApplicationShutdown; "
-            L"Start-Sleep -Seconds 1; "
-            L"Start-Process 'shell:AppsFolder\\WindowsTerminalDev_8wekyb3d8bbwe!App'"
-            L"\"";
+            L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden "
+            L"-File \"C:\\source\\terminal\\tools\\redeploy-dev.ps1\"";
 
         STARTUPINFOW si{};
         si.cb = sizeof(si);
@@ -6602,7 +6603,7 @@ namespace winrt::TerminalApp::implementation
         if (pi.hProcess) CloseHandle(pi.hProcess);
         if (pi.hThread) CloseHandle(pi.hThread);
 
-        // Now close this window - the detached process will re-register and relaunch
+        // Now close this window - the detached process will copy, re-register and relaunch
         CloseWindowRequested.raise(*this, nullptr);
     }
 
