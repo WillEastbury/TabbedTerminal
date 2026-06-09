@@ -400,26 +400,64 @@ std::vector<ListItem> enumerateSerialPorts()
 {
     std::vector<ListItem> items;
 
+    // Primary method: QueryDosDevice
     wchar_t devices[65536] = {};
     auto length = QueryDosDeviceW(nullptr, devices, ARRAYSIZE(devices));
-    if (length == 0)
-        return items;
-
-    const wchar_t* current = devices;
-    while (*current != L'\0')
+    if (length > 0)
     {
-        std::wstring deviceName = current;
-        if (isSerialPortName(deviceName))
+        const wchar_t* current = devices;
+        while (*current != L'\0')
         {
-            ListItem item{};
-            item.name = deviceName;
-            item.detail = L"115200 8N1";
-            item.timestamp = L"Serial";
-            item.command = deviceName;
-            items.push_back(std::move(item));
+            std::wstring deviceName = current;
+            if (isSerialPortName(deviceName))
+            {
+                ListItem item{};
+                item.name = deviceName;
+                item.detail = L"115200 8N1";
+                item.timestamp = L"Serial";
+                item.command = deviceName;
+                items.push_back(std::move(item));
+            }
+            current += deviceName.size() + 1;
         }
+    }
 
-        current += deviceName.size() + 1;
+    // Fallback: Registry (works in AppX/packaged contexts where QueryDosDevice may fail)
+    if (items.empty())
+    {
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DEVICEMAP\\SERIALCOMM", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+        {
+            wchar_t valueName[256];
+            wchar_t valueData[256];
+            DWORD index = 0;
+            DWORD nameLen, dataLen, type;
+
+            while (true)
+            {
+                nameLen = ARRAYSIZE(valueName);
+                dataLen = sizeof(valueData);
+                auto result = RegEnumValueW(hKey, index, valueName, &nameLen, nullptr, &type, (LPBYTE)valueData, &dataLen);
+                if (result != ERROR_SUCCESS)
+                    break;
+
+                if (type == REG_SZ)
+                {
+                    std::wstring portName(valueData);
+                    if (isSerialPortName(portName))
+                    {
+                        ListItem item{};
+                        item.name = portName;
+                        item.detail = L"115200 8N1";
+                        item.timestamp = L"Serial";
+                        item.command = portName;
+                        items.push_back(std::move(item));
+                    }
+                }
+                index++;
+            }
+            RegCloseKey(hKey);
+        }
     }
 
     std::sort(items.begin(), items.end(), [](const auto& left, const auto& right) {

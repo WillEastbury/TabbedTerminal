@@ -3667,6 +3667,30 @@ namespace winrt::TerminalApp::implementation
                                                           const winrt::TerminalApp::Tab& sourceTab,
                                                           TerminalConnection::ITerminalConnection existingConnection)
     {
+        // Intercept WEB: and REPARENT: commandlines to create special pane types
+        if (newTerminalArgs)
+        {
+            auto cmdline = newTerminalArgs.Commandline();
+            if (!cmdline.empty())
+            {
+                std::wstring_view cmd{ cmdline };
+                if (cmd.starts_with(L"WEB:"))
+                {
+                    auto url = winrt::hstring(cmd.substr(4));
+                    winrt::hstring title = L"Web";
+                    try { title = Windows::Foundation::Uri(url).Host(); } catch (...) {}
+                    auto content = winrt::make<WebViewPaneContent>(url, title);
+                    return std::make_shared<Pane>(content);
+                }
+                else if (cmd.starts_with(L"REPARENT:"))
+                {
+                    auto exe = winrt::hstring(cmd.substr(9));
+                    auto content = winrt::make<Win32AppPaneContent>(exe, exe);
+                    return std::make_shared<Pane>(content);
+                }
+            }
+        }
+
         // First things first - Check for making a pane from content ID.
         if (newTerminalArgs &&
             newTerminalArgs.ContentId() != 0)
