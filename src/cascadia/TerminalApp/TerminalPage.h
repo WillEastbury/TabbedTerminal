@@ -497,6 +497,7 @@ namespace winrt::TerminalApp::implementation
         void _OnWebBrowserButtonClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _ShowCopilotSessionPicker();
         void _CreateWebViewTab(const winrt::hstring& url, const winrt::hstring& title);
+        void _CreateWin32AppTab(const winrt::hstring& executable, const winrt::hstring& title, const winrt::hstring& args = L"");
         struct CopilotSessionInfo
         {
             std::wstring id;

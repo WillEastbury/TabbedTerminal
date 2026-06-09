@@ -25,6 +25,7 @@
 #include "SettingsPaneContent.h"
 #include "SnippetsPaneContent.h"
 #include "WebViewPaneContent.h"
+#include "Win32AppPaneContent.h"
 #include "ColorPickupFlyout.h"
 #include "ContainerEnumerator.h"
 #include "TabRowControl.h"
@@ -6605,25 +6606,28 @@ namespace winrt::TerminalApp::implementation
         dialog.Content(panel);
 
         auto weakThis = get_weak();
-        auto urlInputWeak = winrt::make_weak(urlInput);
 
-        dialog.PrimaryButtonClick([weakThis, urlInputWeak](auto&&, auto&&) {
+        // Capture urlInput and dialog strongly — they must survive until the button is clicked
+        dialog.PrimaryButtonClick([weakThis, urlInput, dialog](auto&&, auto&&) {
             if (auto page = weakThis.get())
             {
-                if (auto input = urlInputWeak.get())
+                auto url = urlInput.Text();
+                if (!url.empty())
                 {
-                    auto url = input.Text();
-                    if (!url.empty())
+                    // Auto-prepend http:// if bare hostname
+                    std::wstring urlStr(url);
+                    if (urlStr.find(L"://") == std::wstring::npos)
+                        urlStr = L"http://" + urlStr;
+
+                    winrt::hstring finalUrl(urlStr);
+                    try
                     {
-                        try
-                        {
-                            Windows::Foundation::Uri uri(url);
-                            page->_CreateWebViewTab(url, uri.Host());
-                        }
-                        catch (...)
-                        {
-                            page->_CreateWebViewTab(url, L"Web");
-                        }
+                        Windows::Foundation::Uri uri(finalUrl);
+                        page->_CreateWebViewTab(finalUrl, uri.Host());
+                    }
+                    catch (...)
+                    {
+                        page->_CreateWebViewTab(finalUrl, L"Web");
                     }
                 }
             }
@@ -6679,6 +6683,13 @@ namespace winrt::TerminalApp::implementation
     {
         auto webContent = winrt::make<WebViewPaneContent>(url, title);
         auto pane = std::make_shared<Pane>(webContent);
+        _CreateNewTabFromPane(pane);
+    }
+
+    void TerminalPage::_CreateWin32AppTab(const winrt::hstring& executable, const winrt::hstring& title, const winrt::hstring& args)
+    {
+        auto appContent = winrt::make<Win32AppPaneContent>(executable, title, args);
+        auto pane = std::make_shared<Pane>(appContent);
         _CreateNewTabFromPane(pane);
     }
 }
