@@ -8,6 +8,9 @@ set "CMDFILE=%TEMP%\wt-launcher-cmd-%TOKEN%.txt"
 :: Pass the token via environment so the launcher knows where to write
 set "WT_LAUNCHER_CMDFILE=%CMDFILE%"
 
+:: Path to TabbedTerminal's wtd.exe for opening special tabs
+set "WTD=C:\source\terminal\src\cascadia\CascadiaPackage\bin\x64\Debug\AppX\wtd.exe"
+
 :: Run the TUI launcher
 "%~dp0wt-launcher.exe" 2>nul
 set LAUNCHER_EXIT=%ERRORLEVEL%
@@ -31,11 +34,11 @@ for /f "usebackq delims=" %%a in ("!CMDFILE!") do (
         if "!LINE:~0,4!"=="CWD=" (
             set "CWD=!LINE:~4!"
         ) else if "!LINE:~0,4!"=="WEB:" (
-            :: Web URL: launch in default browser (WebView2 integration TODO)
-            start "" "!LINE:~4!" 2>nul
+            :: Web URL: open as WebView tab in TabbedTerminal
+            start "" "!WTD!" -w 0 new-tab --commandline "%%a" 2>nul
         ) else if "!LINE:~0,9!"=="REPARENT:" (
-            :: Win32 app: launch directly
-            start "" "!LINE:~9!" 2>nul
+            :: Win32 app: open as embedded tab in TabbedTerminal
+            start "" "!WTD!" -w 0 new-tab --commandline "%%a" 2>nul
         ) else (
             :: Additional commands = launch directly as new console processes
             start "" cmd /k "%%a" 2>nul
@@ -52,9 +55,9 @@ if defined CWD cd /d "!CWD!" 2>nul
 :: Execute the primary command (handle special prefixes)
 if defined CMD (
     if "!CMD:~0,4!"=="WEB:" (
-        start "" "!CMD:~4!"
+        start "" "!WTD!" -w 0 new-tab --commandline "!CMD!" 2>nul
     ) else if "!CMD:~0,9!"=="REPARENT:" (
-        start "" "!CMD:~9!"
+        start "" "!WTD!" -w 0 new-tab --commandline "!CMD!" 2>nul
     ) else (
         cmd /k "!CMD!"
     )

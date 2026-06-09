@@ -6608,59 +6608,63 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_OnWebBrowserButtonClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*eventArgs*/)
     {
-        // Show an input dialog asking for URL
-        auto dialog = WUX::Controls::ContentDialog();
-        dialog.Title(winrt::box_value(L"Open Web Tab"));
-        dialog.PrimaryButtonText(L"Open");
-        dialog.CloseButtonText(L"Cancel");
-        dialog.DefaultButton(WUX::Controls::ContentDialogButton::Primary);
-
-        auto panel = WUX::Controls::StackPanel();
-        panel.Spacing(8);
-
-        auto urlLabel = WUX::Controls::TextBlock();
-        urlLabel.Text(L"Enter URL:");
-        panel.Children().Append(urlLabel);
-
-        auto urlInput = WUX::Controls::TextBox();
-        urlInput.PlaceholderText(L"https://example.com");
-        urlInput.Text(L"http://");
-        panel.Children().Append(urlInput);
-
-        dialog.Content(panel);
-
         auto weakThis = get_weak();
 
-        // Capture urlInput and dialog strongly — they must survive until the button is clicked
-        dialog.PrimaryButtonClick([weakThis, urlInput, dialog](auto&&, auto&&) {
-            if (auto page = weakThis.get())
-            {
-                auto url = urlInput.Text();
-                if (!url.empty())
-                {
-                    // Auto-prepend http:// if bare hostname
-                    std::wstring urlStr(url);
-                    if (urlStr.find(L"://") == std::wstring::npos)
-                        urlStr = L"http://" + urlStr;
+        // Use dispatcher to show dialog asynchronously
+        Dispatcher().RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis]() {
+            auto page = weakThis.get();
+            if (!page)
+                return;
 
-                    winrt::hstring finalUrl(urlStr);
-                    try
+            auto dialog = WUX::Controls::ContentDialog();
+            dialog.Title(winrt::box_value(L"Open Web Tab"));
+            dialog.PrimaryButtonText(L"Open");
+            dialog.CloseButtonText(L"Cancel");
+            dialog.DefaultButton(WUX::Controls::ContentDialogButton::Primary);
+
+            auto panel = WUX::Controls::StackPanel();
+            panel.Spacing(8);
+
+            auto urlLabel = WUX::Controls::TextBlock();
+            urlLabel.Text(L"Enter URL:");
+            panel.Children().Append(urlLabel);
+
+            auto urlInput = WUX::Controls::TextBox();
+            urlInput.PlaceholderText(L"https://example.com");
+            urlInput.Text(L"http://");
+            panel.Children().Append(urlInput);
+
+            dialog.Content(panel);
+
+            dialog.PrimaryButtonClick([weakThis, urlInput](auto&&, auto&&) {
+                if (auto p = weakThis.get())
+                {
+                    auto url = urlInput.Text();
+                    if (!url.empty())
                     {
-                        Windows::Foundation::Uri uri(finalUrl);
-                        page->_CreateWebViewTab(finalUrl, uri.Host());
-                    }
-                    catch (...)
-                    {
-                        page->_CreateWebViewTab(finalUrl, L"Web");
+                        std::wstring urlStr(url);
+                        if (urlStr.find(L"://") == std::wstring::npos)
+                            urlStr = L"http://" + urlStr;
+
+                        winrt::hstring finalUrl(urlStr);
+                        try
+                        {
+                            Windows::Foundation::Uri uri(finalUrl);
+                            p->_CreateWebViewTab(finalUrl, uri.Host());
+                        }
+                        catch (...)
+                        {
+                            p->_CreateWebViewTab(finalUrl, L"Web");
+                        }
                     }
                 }
+            });
+
+            if (auto presenter{ page->_dialogPresenter.get() })
+            {
+                presenter.ShowDialog(dialog);
             }
         });
-
-        if (auto presenter{ _dialogPresenter.get() })
-        {
-            presenter.ShowDialog(dialog);
-        }
     }
 
     void TerminalPage::_ShowCopilotSessionPicker()

@@ -93,9 +93,18 @@ namespace winrt::TerminalApp::implementation
             if (wv && ub)
             {
                 std::wstring urlStr(ub.Text());
+                if (urlStr.empty())
+                    return;
                 if (urlStr.find(L"://") == std::wstring::npos)
                     urlStr = L"http://" + urlStr;
-                wv.Navigate(Uri(urlStr));
+                try
+                {
+                    wv.Navigate(Uri(urlStr));
+                }
+                catch (...)
+                {
+                    // Invalid URL — ignore rather than throw out of the handler
+                }
             }
         };
 
@@ -109,7 +118,11 @@ namespace winrt::TerminalApp::implementation
             if (auto wv = webViewWeak.get()) { wv.Refresh(); }
         });
         homeBtn.Click([webViewWeak, url = _url](auto&&, auto&&) {
-            if (auto wv = webViewWeak.get()) { wv.Navigate(Uri(url)); }
+            if (auto wv = webViewWeak.get())
+            {
+                try { wv.Navigate(Uri(url)); }
+                catch (...) {}
+            }
         });
         goBtn.Click([navigateFromBox](auto&&, auto&&) { navigateFromBox(); });
 

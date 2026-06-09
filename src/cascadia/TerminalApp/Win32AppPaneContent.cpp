@@ -35,20 +35,64 @@ namespace winrt::TerminalApp::implementation
         _statusText.Foreground(WUX::Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(255, 160, 160, 160) });
         _grid.Children().Append(_statusText);
 
-        // When the grid is loaded and has a size, launch and embed
-        _grid.Loaded([this](auto&&, auto&&) {
-            _LaunchAndEmbed();
+        // Use weak refs in persistent handlers to avoid a reference cycle
+        // (grid -> handler -> content -> grid would otherwise leak).
+        auto weakThis = get_weak();
+
+        // When the grid is loaded, launch+embed (first time) or re-show (tab switch back)
+        _grid.Loaded([weakThis](auto&&, auto&&) {
+            auto self = weakThis.get();
+            if (!self || self->_closed)
+                return;
+            if (!self->_launched)
+            {
+                self->_launched = true;
+                self->_LaunchAndEmbed();
+            }
+            else if (self->_embedded)
+            {
+                // Returning to this tab — show and reposition the embedded window
+                self->_ShowEmbedded(true);
+                self->_RepositionEmbeddedWindow();
+            }
+        });
+
+        // When the grid is unloaded (tab switched away), hide the embedded window
+        // so it doesn't float over other tabs (XAML airspace issue)
+        _grid.Unloaded([weakThis](auto&&, auto&&) {
+            auto self = weakThis.get();
+            if (self && self->_embedded)
+            {
+                self->_ShowEmbedded(false);
+            }
         });
 
         // Reposition the embedded window when the grid resizes
-        _grid.SizeChanged([this](auto&&, auto&&) {
-            _RepositionEmbeddedWindow();
+        _grid.SizeChanged([weakThis](auto&&, auto&&) {
+            auto self = weakThis.get();
+            if (self && self->_embedded)
+            {
+                self->_RepositionEmbeddedWindow();
+            }
+        });
+
+        // Reposition on layout changes (e.g. sidebar resize, window move within monitor)
+        _grid.LayoutUpdated([weakThis](auto&&, auto&&) {
+            auto self = weakThis.get();
+            if (self && self->_embedded)
+            {
+                self->_RepositionEmbeddedWindow();
+            }
         });
     }
 
     HWND Win32AppPaneContent::_FindTopLevelWindow()
     {
-        HWND hwnd = GetForegroundWindow();
+        HWND hwnd = GetActiveWindow();
+        if (!hwnd)
+        {
+            hwnd = GetForegroundWindow();
+        }
         if (hwnd)
         {
             HWND root = GetAncestor(hwnd, GA_ROOT);
@@ -79,8 +123,9 @@ namespace winrt::TerminalApp::implementation
         return TRUE;
     }
 
-    HWND Win32AppPaneContent::_FindWindowByPid(DWORD pid, int maxWaitMs)
+    HWND Win32AppPaneContent::_FindWindowByProcess(HANDLE process, DWORD pid, int maxWaitMs, bool& processExited)
     {
+        processExited = false;
         EnumWindowsPidData data{ pid, nullptr };
         int waited = 0;
         const int interval = 50;
@@ -90,6 +135,16 @@ namespace winrt::TerminalApp::implementation
             EnumWindows(EnumWindowsPidProc, reinterpret_cast<LPARAM>(&data));
             if (data.result)
                 return data.result;
+
+            // If the launched process has already exited (e.g. calc.exe is a stub
+            // that spawns the real UWP app and exits), give up early — there is no
+            // window we can embed for this PID.
+            if (process && WaitForSingleObject(process, 0) == WAIT_OBJECT_0)
+            {
+                processExited = true;
+                return nullptr;
+            }
+
             Sleep(interval);
             waited += interval;
         }
@@ -123,14 +178,14 @@ namespace winrt::TerminalApp::implementation
 
         if (!created)
         {
-            // Try ShellExecuteEx for apps like calc.exe that redirect
+            // Try ShellExecuteEx for apps that need shell resolution
             SHELLEXECUTEINFOW sei{};
             sei.cbSize = sizeof(sei);
             sei.fMask = SEE_MASK_NOCLOSEPROCESS;
             sei.lpVerb = L"open";
             sei.lpFile = _executable.c_str();
             sei.lpParameters = _args.empty() ? nullptr : _args.c_str();
-            sei.nShow = SW_HIDE;
+            sei.nShow = SW_SHOWNORMAL;
 
             if (!ShellExecuteExW(&sei))
             {
@@ -147,24 +202,63 @@ namespace winrt::TerminalApp::implementation
             CloseHandle(pi.hThread);
         }
 
-        // Find the window and reparent (on background thread)
+        // Find the window and reparent on a background thread.
+        // - Use a WEAK ref for UI-thread dispatches; resolve and bail if the
+        //   pane was closed in the meantime (avoids use-after-free).
+        // - Duplicate the process handle so the worker owns its own copy; the
+        //   member handle may be closed by Close() concurrently.
         auto dispatcher = _grid.Dispatcher();
+        auto weakThis = get_weak();
         DWORD pid = _processId;
         HWND hostHwnd = _hostHwnd;
 
-        // Store a raw pointer to self - safe because the thread will dispatch
-        // back to the UI thread where the pane is guaranteed alive
-        auto* self = this;
-        auto gridRef = _grid; // strong ref to keep pane alive
+        HANDLE workerProcess = nullptr;
+        if (_processHandle)
+        {
+            DuplicateHandle(GetCurrentProcess(), _processHandle, GetCurrentProcess(),
+                &workerProcess, 0, FALSE, DUPLICATE_SAME_ACCESS);
+        }
 
-        std::thread([self, dispatcher, pid, hostHwnd, gridRef]() {
-            HWND targetHwnd = _FindWindowByPid(pid, 8000);
+        std::thread([weakThis, dispatcher, pid, workerProcess, hostHwnd]() {
+            bool processExited = false;
+            HWND targetHwnd = _FindWindowByProcess(workerProcess, pid, 8000, processExited);
+            if (workerProcess)
+            {
+                CloseHandle(workerProcess);
+            }
+
             if (!targetHwnd)
+            {
+                // Report failure back on the UI thread
+                dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, processExited]() {
+                    auto self = weakThis.get();
+                    if (!self || self->_closed)
+                        return;
+                    if (processExited)
+                    {
+                        self->_statusText.Text(
+                            L"\"" + self->_title + L"\" could not be embedded.\n"
+                            L"It launches a separate process (e.g. a Store app) that\n"
+                            L"cannot be hosted inside a tab.");
+                    }
+                    else
+                    {
+                        self->_statusText.Text(L"Timed out waiting for " + self->_title + L" window.");
+                    }
+                });
                 return;
+            }
 
             Sleep(300); // let the window fully render
 
-            dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [self, targetHwnd, hostHwnd]() {
+            dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, targetHwnd, hostHwnd]() {
+                auto self = weakThis.get();
+                // Bail if the tab was closed while we were searching
+                if (!self || self->_closed)
+                {
+                    return;
+                }
+
                 self->_embeddedHwnd = targetHwnd;
 
                 // Remove title bar, borders, make it a child
@@ -181,6 +275,8 @@ namespace winrt::TerminalApp::implementation
                 // Reparent
                 SetParent(targetHwnd, hostHwnd);
 
+                self->_embedded = true;
+
                 // Position
                 self->_RepositionEmbeddedWindow();
 
@@ -193,6 +289,14 @@ namespace winrt::TerminalApp::implementation
                 ShowWindow(targetHwnd, SW_SHOW);
             });
         }).detach();
+    }
+
+    void Win32AppPaneContent::_ShowEmbedded(bool show)
+    {
+        if (_embeddedHwnd)
+        {
+            ShowWindow(_embeddedHwnd, show ? SW_SHOW : SW_HIDE);
+        }
     }
 
     void Win32AppPaneContent::_RepositionEmbeddedWindow()
@@ -212,10 +316,20 @@ namespace winrt::TerminalApp::implementation
             int w = static_cast<int>(size.x * dpiScale);
             int h = static_cast<int>(size.y * dpiScale);
 
-            if (w > 0 && h > 0)
+            if (w <= 0 || h <= 0)
+                return;
+
+            // Skip redundant moves — LayoutUpdated fires very frequently and
+            // MoveWindow on every tick would be wasteful and could flicker.
+            RECT newRect{ x, y, x + w, y + h };
+            if (newRect.left == _lastRect.left && newRect.top == _lastRect.top &&
+                newRect.right == _lastRect.right && newRect.bottom == _lastRect.bottom)
             {
-                MoveWindow(_embeddedHwnd, x, y, w, h, TRUE);
+                return;
             }
+            _lastRect = newRect;
+
+            MoveWindow(_embeddedHwnd, x, y, w, h, TRUE);
         }
         catch (...)
         {
@@ -238,7 +352,21 @@ namespace winrt::TerminalApp::implementation
 
     void Win32AppPaneContent::Focus(FocusState /*reason*/)
     {
-        if (_embeddedHwnd)
+        if (!_embeddedHwnd)
+            return;
+
+        // The embedded window belongs to another thread/process. A plain
+        // SetFocus across threads is ignored unless the input queues are
+        // attached, so temporarily attach to hand it focus.
+        DWORD targetThread = GetWindowThreadProcessId(_embeddedHwnd, nullptr);
+        DWORD thisThread = GetCurrentThreadId();
+        if (targetThread && targetThread != thisThread)
+        {
+            AttachThreadInput(thisThread, targetThread, TRUE);
+            SetFocus(_embeddedHwnd);
+            AttachThreadInput(thisThread, targetThread, FALSE);
+        }
+        else
         {
             SetFocus(_embeddedHwnd);
         }
@@ -246,8 +374,12 @@ namespace winrt::TerminalApp::implementation
 
     void Win32AppPaneContent::Close()
     {
+        _closed = true;
+
         if (_embeddedHwnd)
         {
+            // Un-parent and restore a normal window style so the app can close
+            // gracefully on its own thread.
             LONG style = GetWindowLong(_embeddedHwnd, GWL_STYLE);
             style &= ~WS_CHILD;
             style |= WS_OVERLAPPEDWINDOW;
@@ -255,10 +387,17 @@ namespace winrt::TerminalApp::implementation
             SetParent(_embeddedHwnd, nullptr);
             PostMessage(_embeddedHwnd, WM_CLOSE, 0, 0);
             _embeddedHwnd = nullptr;
+            _embedded = false;
         }
+
+        // Terminate the process we launched. Give a WM_CLOSE-driven graceful
+        // exit a brief chance first, then force-terminate to avoid leaks.
         if (_processHandle)
         {
-            TerminateProcess(_processHandle, 0);
+            if (WaitForSingleObject(_processHandle, 500) != WAIT_OBJECT_0)
+            {
+                TerminateProcess(_processHandle, 0);
+            }
             CloseHandle(_processHandle);
             _processHandle = nullptr;
         }

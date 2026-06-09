@@ -37,13 +37,18 @@ namespace winrt::TerminalApp::implementation
         winrt::hstring _title;
         HWND _embeddedHwnd{ nullptr };
         HWND _hostHwnd{ nullptr };
+        RECT _lastRect{ 0, 0, 0, 0 };
         DWORD _processId{ 0 };
         HANDLE _processHandle{ nullptr };
+        bool _closed{ false };
+        bool _embedded{ false };
+        bool _launched{ false };
 
         void _BuildUI();
         void _LaunchAndEmbed();
         void _RepositionEmbeddedWindow();
-        static HWND _FindWindowByPid(DWORD pid, int maxWaitMs = 5000);
+        void _ShowEmbedded(bool show);
+        static HWND _FindWindowByProcess(HANDLE process, DWORD pid, int maxWaitMs, bool& processExited);
         static HWND _FindTopLevelWindow();
     };
 }
