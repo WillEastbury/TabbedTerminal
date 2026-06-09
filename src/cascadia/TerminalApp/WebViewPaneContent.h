@@ -4,9 +4,15 @@
 #pragma once
 #include "winrt/TerminalApp.h"
 #include "BasicPaneEvents.h"
+#include <WebView2.h>
+#include <wil/com.h>
 
 namespace winrt::TerminalApp::implementation
 {
+    // Hosts a real WebView2 (Chromium/Edge) on an HWND parented to the Terminal
+    // window. The legacy Windows.UI.Xaml.Controls.WebView (EdgeHTML) is retired
+    // on modern Windows and renders blank, so we use the native CoreWebView2 COM
+    // API and position the controller over our XAML Grid.
     class WebViewPaneContent : public winrt::implements<WebViewPaneContent, IPaneContent>, public BasicPaneEvents
     {
     public:
@@ -33,10 +39,22 @@ namespace winrt::TerminalApp::implementation
 
     private:
         winrt::Windows::UI::Xaml::Controls::Grid _grid{ nullptr };
-        winrt::Windows::UI::Xaml::Controls::WebView _webView{ nullptr };
+        winrt::Windows::UI::Xaml::Controls::TextBlock _statusText{ nullptr };
         winrt::Windows::UI::Xaml::Controls::TextBox _urlBox{ nullptr };
         winrt::hstring _title;
         winrt::hstring _url;
+
+        wil::com_ptr<ICoreWebView2Controller> _controller;
+        wil::com_ptr<ICoreWebView2> _webview;
+        HWND _hostHwnd{ nullptr };
+        RECT _lastBounds{ 0, 0, 0, 0 };
+        bool _closed{ false };
+        bool _initStarted{ false };
+        bool _ready{ false };
+
         void _BuildUI();
+        void _InitWebView2();
+        void _UpdateBounds();
+        void _SetUrlText(const winrt::hstring& text);
     };
 }

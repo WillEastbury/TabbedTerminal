@@ -4,10 +4,13 @@
 #include "pch.h"
 #include "WebViewPaneContent.h"
 #include "Utils.h"
+#include <wrl.h>
+#include <wil/resource.h>
 
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Microsoft::Terminal::Settings::Model;
+using namespace Microsoft::WRL;
 
 namespace winrt::TerminalApp::implementation
 {
@@ -23,8 +26,8 @@ namespace winrt::TerminalApp::implementation
         namespace WUX = winrt::Windows::UI::Xaml;
 
         _grid = WUX::Controls::Grid();
+        _grid.Background(WUX::Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(255, 24, 24, 24) });
 
-        // Two rows: URL bar (Auto) + WebView (*)
         WUX::Controls::RowDefinition urlRow;
         urlRow.Height(WUX::GridLengthHelper::Auto());
         WUX::Controls::RowDefinition contentRow;
@@ -32,7 +35,7 @@ namespace winrt::TerminalApp::implementation
         _grid.RowDefinitions().Append(urlRow);
         _grid.RowDefinitions().Append(contentRow);
 
-        // URL bar: [Back] [Forward] [Refresh] [URL TextBox] [Go]
+        // URL bar: [Back] [Forward] [Refresh] [Home] [URL TextBox] [Go]
         auto urlBar = WUX::Controls::StackPanel();
         urlBar.Orientation(WUX::Controls::Orientation::Horizontal);
         urlBar.Padding(WUX::ThicknessHelper::FromLengths(4, 3, 4, 3));
@@ -52,10 +55,10 @@ namespace winrt::TerminalApp::implementation
             return btn;
         };
 
-        auto backBtn = makeNavButton(L"\xE72B");     // ChevronLeft
-        auto fwdBtn = makeNavButton(L"\xE72A");      // ChevronRight
-        auto refreshBtn = makeNavButton(L"\xE72C");   // Refresh
-        auto homeBtn = makeNavButton(L"\xE80F");      // Home
+        auto backBtn = makeNavButton(L"\xE72B");
+        auto fwdBtn = makeNavButton(L"\xE72A");
+        auto refreshBtn = makeNavButton(L"\xE72C");
+        auto homeBtn = makeNavButton(L"\xE80F");
 
         _urlBox = WUX::Controls::TextBox();
         _urlBox.Text(_url);
@@ -76,86 +79,239 @@ namespace winrt::TerminalApp::implementation
         WUX::Controls::Grid::SetRow(urlBar, 0);
         _grid.Children().Append(urlBar);
 
-        // WebView
-        _webView = WUX::Controls::WebView();
-        _webView.Source(Uri(_url));
-        WUX::Controls::Grid::SetRow(_webView, 1);
-        _grid.Children().Append(_webView);
+        // Status text in the content area (shown while initializing)
+        _statusText = WUX::Controls::TextBlock();
+        _statusText.Text(L"Loading " + _url + L"...");
+        _statusText.HorizontalAlignment(WUX::HorizontalAlignment::Center);
+        _statusText.VerticalAlignment(WUX::VerticalAlignment::Center);
+        _statusText.Foreground(WUX::Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(255, 160, 160, 160) });
+        WUX::Controls::Grid::SetRow(_statusText, 1);
+        _grid.Children().Append(_statusText);
 
-        // Wire navigation
-        auto webViewWeak = winrt::make_weak(_webView);
-        auto urlBoxWeak = winrt::make_weak(_urlBox);
-        auto weakThis = winrt::make_weak<IPaneContent>(*this);
-
-        auto navigateFromBox = [webViewWeak, urlBoxWeak]() {
-            auto wv = webViewWeak.get();
-            auto ub = urlBoxWeak.get();
-            if (wv && ub)
-            {
-                std::wstring urlStr(ub.Text());
-                if (urlStr.empty())
-                    return;
-                if (urlStr.find(L"://") == std::wstring::npos)
-                    urlStr = L"http://" + urlStr;
-                try
-                {
-                    wv.Navigate(Uri(urlStr));
-                }
-                catch (...)
-                {
-                    // Invalid URL — ignore rather than throw out of the handler
-                }
-            }
+        // These handlers are owned by XAML elements that this object owns, so
+        // they cannot outlive `this`; capturing the raw pointer is safe.
+        auto navigateFromBox = [this]() {
+            if (!_urlBox)
+                return;
+            Navigate(_urlBox.Text());
         };
 
-        backBtn.Click([webViewWeak](auto&&, auto&&) {
-            if (auto wv = webViewWeak.get()) { if (wv.CanGoBack()) wv.GoBack(); }
+        backBtn.Click([this](auto&&, auto&&) {
+            if (_webview) _webview->GoBack();
         });
-        fwdBtn.Click([webViewWeak](auto&&, auto&&) {
-            if (auto wv = webViewWeak.get()) { if (wv.CanGoForward()) wv.GoForward(); }
+        fwdBtn.Click([this](auto&&, auto&&) {
+            if (_webview) _webview->GoForward();
         });
-        refreshBtn.Click([webViewWeak](auto&&, auto&&) {
-            if (auto wv = webViewWeak.get()) { wv.Refresh(); }
+        refreshBtn.Click([this](auto&&, auto&&) {
+            if (_webview) _webview->Reload();
         });
-        homeBtn.Click([webViewWeak, url = _url](auto&&, auto&&) {
-            if (auto wv = webViewWeak.get())
-            {
-                try { wv.Navigate(Uri(url)); }
-                catch (...) {}
-            }
+        homeBtn.Click([this](auto&&, auto&&) {
+            Navigate(_url);
         });
         goBtn.Click([navigateFromBox](auto&&, auto&&) { navigateFromBox(); });
-
         _urlBox.KeyDown([navigateFromBox](auto&&, const WUX::Input::KeyRoutedEventArgs& args) {
             if (args.Key() == winrt::Windows::System::VirtualKey::Enter)
                 navigateFromBox();
         });
 
-        // Update URL box and title on navigation
-        _webView.NavigationCompleted([urlBoxWeak, weakThis](auto&& sender, auto&&) {
-            if (auto ub = urlBoxWeak.get())
+        // Lifecycle: init WebView2 on first load; show/hide on tab switch.
+        _grid.Loaded([this](auto&&, auto&&) {
+            if (_closed)
+                return;
+            if (!_initStarted)
             {
-                if (auto wv = sender.try_as<WUX::Controls::WebView>())
-                {
-                    ub.Text(wv.Source().AbsoluteUri());
-                }
+                _initStarted = true;
+                _InitWebView2();
+            }
+            else if (_controller)
+            {
+                _controller->put_IsVisible(TRUE);
+                _UpdateBounds();
             }
         });
 
-        _webView.NavigationStarting([urlBoxWeak](auto&& sender, auto&&) {
-            if (auto ub = urlBoxWeak.get())
+        _grid.Unloaded([this](auto&&, auto&&) {
+            if (_controller)
             {
-                if (auto wv = sender.try_as<WUX::Controls::WebView>())
-                {
-                    ub.Text(wv.Source().AbsoluteUri());
-                }
+                _controller->put_IsVisible(FALSE);
             }
         });
+
+        _grid.SizeChanged([this](auto&&, auto&&) {
+            _UpdateBounds();
+        });
+        _grid.LayoutUpdated([this](auto&&, auto&&) {
+            _UpdateBounds();
+        });
+    }
+
+    void WebViewPaneContent::_InitWebView2()
+    {
+        // Resolve the Terminal's top-level window to parent the WebView2 into.
+        _hostHwnd = GetActiveWindow();
+        if (!_hostHwnd)
+            _hostHwnd = GetForegroundWindow();
+        if (!_hostHwnd)
+        {
+            _statusText.Text(L"Error: no host window for WebView2");
+            return;
+        }
+
+        // Persistent user-data folder so cookies/logins/state survive restarts.
+        std::wstring userDataFolder;
+        {
+            wchar_t* localAppData = nullptr;
+            size_t len = 0;
+            if (_wdupenv_s(&localAppData, &len, L"LOCALAPPDATA") == 0 && localAppData)
+            {
+                userDataFolder = std::wstring(localAppData) + L"\\TabbedTerminal\\WebView2";
+                free(localAppData);
+            }
+        }
+
+        // Keep this object alive across the async init (the tab could close).
+        auto strongThis = get_strong();
+        const wchar_t* udf = userDataFolder.empty() ? nullptr : userDataFolder.c_str();
+
+        HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
+            nullptr,
+            udf,
+            nullptr,
+            Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+                [strongThis](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                    if (strongThis->_closed || FAILED(result) || !env)
+                    {
+                        if (FAILED(result) && !strongThis->_closed)
+                        {
+                            strongThis->_statusText.Text(L"WebView2 runtime not available.\nInstall the Microsoft Edge WebView2 Runtime.");
+                        }
+                        return S_OK;
+                    }
+
+                    env->CreateCoreWebView2Controller(
+                        strongThis->_hostHwnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [strongThis](HRESULT result2, ICoreWebView2Controller* controller) -> HRESULT {
+                                if (strongThis->_closed || FAILED(result2) || !controller)
+                                    return S_OK;
+
+                                strongThis->_controller = controller;
+                                strongThis->_controller->get_CoreWebView2(strongThis->_webview.put());
+                                strongThis->_controller->put_IsVisible(TRUE);
+                                strongThis->_ready = true;
+                                strongThis->_lastBounds = RECT{ 0, 0, 0, 0 };
+                                strongThis->_UpdateBounds();
+
+                                // Update the URL box as the source changes. The
+                                // handler is owned by the webview (owned by this
+                                // object); guard _closed for safety.
+                                if (strongThis->_webview)
+                                {
+                                    auto* self = strongThis.get();
+                                    ::EventRegistrationToken token{};
+                                    strongThis->_webview->add_SourceChanged(
+                                        Callback<ICoreWebView2SourceChangedEventHandler>(
+                                            [self](ICoreWebView2* sender, ICoreWebView2SourceChangedEventArgs*) -> HRESULT {
+                                                if (self->_closed)
+                                                    return S_OK;
+                                                wil::unique_cotaskmem_string uri;
+                                                if (SUCCEEDED(sender->get_Source(&uri)) && uri)
+                                                {
+                                                    self->_SetUrlText(winrt::hstring{ uri.get() });
+                                                }
+                                                return S_OK;
+                                            }).Get(),
+                                        &token);
+
+                                    strongThis->_webview->Navigate(strongThis->_url.c_str());
+                                }
+
+                                strongThis->_statusText.Visibility(Visibility::Collapsed);
+                                return S_OK;
+                            }).Get());
+                    return S_OK;
+                }).Get());
+
+        if (FAILED(hr))
+        {
+            wchar_t msg[64];
+            swprintf_s(msg, L"Failed to start WebView2 (0x%08X)", static_cast<unsigned int>(hr));
+            _statusText.Text(msg);
+        }
+    }
+
+    void WebViewPaneContent::_UpdateBounds()
+    {
+        if (!_controller || !_hostHwnd)
+            return;
+
+        try
+        {
+            auto transform = _grid.TransformToVisual(nullptr);
+            auto origin = transform.TransformPoint(Point(0, 0));
+            auto size = _grid.ActualSize();
+
+            // Offset the WebView below the URL bar (row 0).
+            float urlBarHeight = 0;
+            if (_grid.Children().Size() > 0)
+            {
+                if (auto fe = _grid.Children().GetAt(0).try_as<FrameworkElement>())
+                {
+                    urlBarHeight = static_cast<float>(fe.ActualHeight());
+                }
+            }
+
+            float dpiScale = static_cast<float>(GetDpiForWindow(_hostHwnd)) / 96.0f;
+            int x = static_cast<int>(origin.X * dpiScale);
+            int y = static_cast<int>((origin.Y + urlBarHeight) * dpiScale);
+            int w = static_cast<int>(size.x * dpiScale);
+            int h = static_cast<int>((size.y - urlBarHeight) * dpiScale);
+
+            if (w <= 0 || h <= 0)
+                return;
+
+            RECT bounds{ x, y, x + w, y + h };
+            if (bounds.left == _lastBounds.left && bounds.top == _lastBounds.top &&
+                bounds.right == _lastBounds.right && bounds.bottom == _lastBounds.bottom)
+            {
+                return;
+            }
+            _lastBounds = bounds;
+            _controller->put_Bounds(bounds);
+        }
+        catch (...)
+        {
+        }
+    }
+
+    void WebViewPaneContent::_SetUrlText(const winrt::hstring& text)
+    {
+        if (_urlBox)
+        {
+            _urlBox.Text(text);
+        }
+    }
+
+    void WebViewPaneContent::Navigate(const winrt::hstring& url)
+    {
+        std::wstring urlStr(url);
+        if (urlStr.empty())
+            return;
+        if (urlStr.find(L"://") == std::wstring::npos)
+            urlStr = L"http://" + urlStr;
+
+        if (_webview)
+        {
+            _webview->Navigate(urlStr.c_str());
+        }
+        else
+        {
+            _url = winrt::hstring{ urlStr };
+        }
     }
 
     void WebViewPaneContent::UpdateSettings(const CascadiaSettings& /*settings*/)
     {
-        // No settings to update for WebView
     }
 
     FrameworkElement WebViewPaneContent::GetRoot()
@@ -170,19 +326,21 @@ namespace winrt::TerminalApp::implementation
 
     void WebViewPaneContent::Focus(FocusState reason)
     {
-        if (reason != FocusState::Unfocused && _webView)
+        if (reason != FocusState::Unfocused && _controller)
         {
-            _webView.Focus(reason);
+            _controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         }
     }
 
     void WebViewPaneContent::Close()
     {
-        if (_webView)
+        _closed = true;
+        if (_controller)
         {
-            // Navigate away to release resources
-            _webView.NavigateToString(L"");
+            _controller->Close();
+            _controller = nullptr;
         }
+        _webview = nullptr;
     }
 
     INewContentArgs WebViewPaneContent::GetNewTerminalArgs(const BuildStartupKind /*kind*/) const
@@ -192,7 +350,7 @@ namespace winrt::TerminalApp::implementation
 
     winrt::hstring WebViewPaneContent::Icon() const
     {
-        static constexpr std::wstring_view glyph{ L"\xE774" }; // Globe icon
+        static constexpr std::wstring_view glyph{ L"\xE774" }; // Globe
         return winrt::hstring{ glyph };
     }
 
@@ -204,18 +362,5 @@ namespace winrt::TerminalApp::implementation
     winrt::Windows::UI::Xaml::Media::Brush WebViewPaneContent::BackgroundBrush()
     {
         return nullptr;
-    }
-
-    void WebViewPaneContent::Navigate(const winrt::hstring& url)
-    {
-        _url = url;
-        if (_webView)
-        {
-            _webView.Source(Uri(url));
-        }
-        if (_urlBox)
-        {
-            _urlBox.Text(url);
-        }
     }
 }

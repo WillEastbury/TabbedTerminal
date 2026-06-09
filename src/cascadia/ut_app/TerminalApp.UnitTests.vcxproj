@@ -47,7 +47,7 @@
       <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WindowsApp.lib;$(SolutionDir)packages\Microsoft.Web.WebView2.1.0.1661.34\build\native\x64\WebView2LoaderStatic.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!--
       SettingsModelLib contains a DllMain that we need to force the use of.
       If you don't have this, then you'll see an error like
