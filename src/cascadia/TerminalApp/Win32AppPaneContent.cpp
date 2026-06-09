@@ -35,53 +35,51 @@ namespace winrt::TerminalApp::implementation
         _statusText.Foreground(WUX::Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(255, 160, 160, 160) });
         _grid.Children().Append(_statusText);
 
-        // Use weak refs in persistent handlers to avoid a reference cycle
-        // (grid -> handler -> content -> grid would otherwise leak).
-        auto weakThis = get_weak();
+        // These handlers are owned by `_grid`, which this object owns, so they
+        // cannot outlive `this`; capturing the raw pointer is safe and avoids a
+        // reference cycle. Do NOT call get_weak()/get_strong() here — _BuildUI
+        // runs from the constructor, where the object isn't yet owned by a smart
+        // pointer and those calls trip a debug assertion.
 
         // When the grid is loaded, launch+embed (first time) or re-show (tab switch back)
-        _grid.Loaded([weakThis](auto&&, auto&&) {
-            auto self = weakThis.get();
-            if (!self || self->_closed)
+        _grid.Loaded([this](auto&&, auto&&) {
+            if (_closed)
                 return;
-            if (!self->_launched)
+            if (!_launched)
             {
-                self->_launched = true;
-                self->_LaunchAndEmbed();
+                _launched = true;
+                _LaunchAndEmbed();
             }
-            else if (self->_embedded)
+            else if (_embedded)
             {
                 // Returning to this tab — show and reposition the embedded window
-                self->_ShowEmbedded(true);
-                self->_RepositionEmbeddedWindow();
+                _ShowEmbedded(true);
+                _RepositionEmbeddedWindow();
             }
         });
 
         // When the grid is unloaded (tab switched away), hide the embedded window
         // so it doesn't float over other tabs (XAML airspace issue)
-        _grid.Unloaded([weakThis](auto&&, auto&&) {
-            auto self = weakThis.get();
-            if (self && self->_embedded)
+        _grid.Unloaded([this](auto&&, auto&&) {
+            if (_embedded)
             {
-                self->_ShowEmbedded(false);
+                _ShowEmbedded(false);
             }
         });
 
         // Reposition the embedded window when the grid resizes
-        _grid.SizeChanged([weakThis](auto&&, auto&&) {
-            auto self = weakThis.get();
-            if (self && self->_embedded)
+        _grid.SizeChanged([this](auto&&, auto&&) {
+            if (_embedded)
             {
-                self->_RepositionEmbeddedWindow();
+                _RepositionEmbeddedWindow();
             }
         });
 
         // Reposition on layout changes (e.g. sidebar resize, window move within monitor)
-        _grid.LayoutUpdated([weakThis](auto&&, auto&&) {
-            auto self = weakThis.get();
-            if (self && self->_embedded)
+        _grid.LayoutUpdated([this](auto&&, auto&&) {
+            if (_embedded)
             {
-                self->_RepositionEmbeddedWindow();
+                _RepositionEmbeddedWindow();
             }
         });
     }
@@ -220,74 +218,101 @@ namespace winrt::TerminalApp::implementation
         }
 
         std::thread([weakThis, dispatcher, pid, workerProcess, hostHwnd]() {
-            bool processExited = false;
-            HWND targetHwnd = _FindWindowByProcess(workerProcess, pid, 8000, processExited);
-            if (workerProcess)
+            // A raw std::thread starts with COM/WinRT uninitialized. Calling a
+            // projected WinRT API (CoreDispatcher::RunAsync, which builds an
+            // agile delegate) from such a thread fails with CO_E_NOTINITIALIZED
+            // and throws hresult_error; an exception escaping this thread would
+            // call std::terminate()/abort(). Initialize an MTA apartment and
+            // guard the whole body so nothing can escape.
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            try
             {
-                CloseHandle(workerProcess);
-            }
-
-            if (!targetHwnd)
-            {
-                // Report failure back on the UI thread
-                dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, processExited]() {
-                    auto self = weakThis.get();
-                    if (!self || self->_closed)
-                        return;
-                    if (processExited)
-                    {
-                        self->_statusText.Text(
-                            L"\"" + self->_title + L"\" could not be embedded.\n"
-                            L"It launches a separate process (e.g. a Store app) that\n"
-                            L"cannot be hosted inside a tab.");
-                    }
-                    else
-                    {
-                        self->_statusText.Text(L"Timed out waiting for " + self->_title + L" window.");
-                    }
-                });
-                return;
-            }
-
-            Sleep(300); // let the window fully render
-
-            dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, targetHwnd, hostHwnd]() {
-                auto self = weakThis.get();
-                // Bail if the tab was closed while we were searching
-                if (!self || self->_closed)
+                bool processExited = false;
+                HWND targetHwnd = _FindWindowByProcess(workerProcess, pid, 8000, processExited);
+                if (workerProcess)
                 {
+                    CloseHandle(workerProcess);
+                }
+
+                if (!targetHwnd)
+                {
+                    // Report failure back on the UI thread
+                    dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, processExited]() {
+                        try
+                        {
+                            auto self = weakThis.get();
+                            if (!self || self->_closed)
+                                return;
+                            if (processExited)
+                            {
+                                self->_statusText.Text(
+                                    L"\"" + self->_title + L"\" could not be embedded.\n"
+                                    L"It launches a separate process (e.g. a Store app) that\n"
+                                    L"cannot be hosted inside a tab.");
+                            }
+                            else
+                            {
+                                self->_statusText.Text(L"Timed out waiting for " + self->_title + L" window.");
+                            }
+                        }
+                        catch (...)
+                        {
+                        }
+                    });
+                    winrt::uninit_apartment();
                     return;
                 }
 
-                self->_embeddedHwnd = targetHwnd;
+                Sleep(300); // let the window fully render
 
-                // Remove title bar, borders, make it a child
-                LONG style = GetWindowLong(targetHwnd, GWL_STYLE);
-                style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP);
-                style |= WS_CHILD | WS_VISIBLE;
-                SetWindowLong(targetHwnd, GWL_STYLE, style);
+                dispatcher.RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [weakThis, targetHwnd, hostHwnd]() {
+                    try
+                    {
+                        auto self = weakThis.get();
+                        // Bail if the tab was closed while we were searching
+                        if (!self || self->_closed)
+                        {
+                            return;
+                        }
 
-                LONG exStyle = GetWindowLong(targetHwnd, GWL_EXSTYLE);
-                exStyle &= ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_APPWINDOW);
-                exStyle |= WS_EX_TOOLWINDOW;
-                SetWindowLong(targetHwnd, GWL_EXSTYLE, exStyle);
+                        self->_embeddedHwnd = targetHwnd;
 
-                // Reparent
-                SetParent(targetHwnd, hostHwnd);
+                        // Remove title bar, borders, make it a child
+                        LONG style = GetWindowLong(targetHwnd, GWL_STYLE);
+                        style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP);
+                        style |= WS_CHILD | WS_VISIBLE;
+                        SetWindowLong(targetHwnd, GWL_STYLE, style);
 
-                self->_embedded = true;
+                        LONG exStyle = GetWindowLong(targetHwnd, GWL_EXSTYLE);
+                        exStyle &= ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_APPWINDOW);
+                        exStyle |= WS_EX_TOOLWINDOW;
+                        SetWindowLong(targetHwnd, GWL_EXSTYLE, exStyle);
 
-                // Position
-                self->_RepositionEmbeddedWindow();
+                        // Reparent
+                        SetParent(targetHwnd, hostHwnd);
 
-                // Hide status
-                self->_statusText.Visibility(Visibility::Collapsed);
+                        self->_embedded = true;
 
-                // Force redraw
-                SetWindowPos(targetHwnd, nullptr, 0, 0, 0, 0,
-                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-                ShowWindow(targetHwnd, SW_SHOW);
-            });
+                        // Position
+                        self->_RepositionEmbeddedWindow();
+
+                        // Hide status
+                        self->_statusText.Visibility(Visibility::Collapsed);
+
+                        // Force redraw
+                        SetWindowPos(targetHwnd, nullptr, 0, 0, 0, 0,
+                            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+                        ShowWindow(targetHwnd, SW_SHOW);
+                    }
+                    catch (...)
+                    {
+                    }
+                });
+            }
+            catch (...)
+            {
+            }
+            winrt::uninit_apartment();
         }).detach();
     }
 
