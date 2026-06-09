@@ -375,6 +375,16 @@ std::string runDockerCapture(DockerBackend backend, const std::wstring& args)
 static DockerBackend g_activeBackend = DockerBackend::None;
 static bool g_yoloMode = false;
 
+// Serial baud rate selection (cycled with 'B' on the Serial tab)
+static const DWORD g_baudRates[] = { 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1500000, 2000000, 3000000 };
+static int g_baudIndex = 4; // default 115200
+static DWORD currentBaud() { return g_baudRates[g_baudIndex]; }
+static void cycleBaud(int dir)
+{
+    const int count = (int)(sizeof(g_baudRates) / sizeof(g_baudRates[0]));
+    g_baudIndex = (g_baudIndex + dir + count) % count;
+}
+
 // ─── Data Providers ─────────────────────────────────────────────────────────
 
 bool isSerialPortName(const std::wstring& deviceName)
@@ -413,7 +423,7 @@ std::vector<ListItem> enumerateSerialPorts()
             {
                 ListItem item{};
                 item.name = deviceName;
-                item.detail = L"115200 8N1";
+                item.detail = std::to_wstring(currentBaud()) + L" 8N1";
                 item.timestamp = L"Serial";
                 item.command = deviceName;
                 items.push_back(std::move(item));
@@ -448,7 +458,7 @@ std::vector<ListItem> enumerateSerialPorts()
                     {
                         ListItem item{};
                         item.name = portName;
-                        item.detail = L"115200 8N1";
+                        item.detail = std::to_wstring(currentBaud()) + L" 8N1";
                         item.timestamp = L"Serial";
                         item.command = portName;
                         items.push_back(std::move(item));
@@ -1251,7 +1261,18 @@ void renderFooter(Tab currentTab, size_t checkedCount, bool yolo)
     }
     else
     {
-        wprintf(L" [\u2191\u2193] Nav  [Enter] Select  [R] Refresh  [Esc] Quit");
+        if (currentTab == Tab::Serial)
+        {
+            wprintf(L" [\u2191\u2193] Nav  [Enter] Connect  ");
+            setColorYellow();
+            wprintf(L"[B] Baud %lu", currentBaud());
+            setColorDimCyan();
+            wprintf(L"  [R] Refresh  [Esc] Quit");
+        }
+        else
+        {
+            wprintf(L" [\u2191\u2193] Nav  [Enter] Select  [R] Refresh  [Esc] Quit");
+        }
     }
     setThemeBg();
 }
@@ -1478,7 +1499,8 @@ int runSerialTerminal(const std::wstring& portName)
         return 1;
     }
 
-    wchar_t commSettings[] = L"baud=115200 parity=N data=8 stop=1 xon=off odsr=off octs=off dtr=on rts=on idsr=off";
+    wchar_t commSettings[128];
+    swprintf_s(commSettings, L"baud=%lu parity=N data=8 stop=1 xon=off odsr=off octs=off dtr=on rts=on idsr=off", currentBaud());
     if (!BuildCommDCBW(commSettings, &dcb))
     {
         wprintf(L"Failed to build serial settings for %ls (error %lu)\n", portName.c_str(), GetLastError());
@@ -1528,7 +1550,7 @@ int runSerialTerminal(const std::wstring& portName)
     FlushConsoleInputBuffer(hIn);
 
     wprintf(L"\x1b[0m\x1b[2J\x1b[H");
-    wprintf(L"\x1b[36mConnected to %ls @ 115200 8N1\x1b[0m\n", portName.c_str());
+    wprintf(L"\x1b[36mConnected to %ls @ %lu 8N1\x1b[0m\n", portName.c_str(), currentBaud());
     wprintf(L"\x1b[90mPress Ctrl+] to disconnect\x1b[0m\n\n");
     _flushall();
 
@@ -2226,6 +2248,13 @@ int wmain()
                     checkedItems.clear();
                     selectedIndex = 0;
                     scrollOffset = 0;
+                    needsRedraw = true;
+                }
+                // B cycles the serial baud rate (Serial tab only)
+                else if ((key.ch == L'b' || key.ch == L'B') && currentTab == Tab::Serial)
+                {
+                    cycleBaud((key.ch == L'B') ? -1 : +1);
+                    tabData[(int)Tab::Serial] = enumerateSerialPorts();
                     needsRedraw = true;
                 }
             }
